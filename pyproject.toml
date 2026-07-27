@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "th-programming"
+version = "2.0.0"
+description = "TH-Programming — ภาษาโปรแกรมที่เขียนเป็นประโยคภาษาไทย แล้วคอมไพล์เป็น Python"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+keywords = ["thai", "programming-language", "compiler", "nlp", "education"]
+classifiers = [
+    "Natural Language :: Thai",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Compilers",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ninlapat5G/TH-Programming"
+Repository = "https://github.com/Ninlapat5G/TH-Programming"
+
+# ตั้งใจไม่พึ่งไลบรารีภายนอกเลย — ติดตั้งแล้วใช้ได้ทันที
+dependencies = []
+
+[project.scripts]
+thpro = "thpro.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["thpro*"]

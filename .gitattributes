@@ -1,0 +1,10 @@
+# ให้ทุกไฟล์ข้อความใช้ LF ใน repo
+* text=auto eol=lf
+
+# ไฟล์ .bat ต้องเป็น CRLF มิฉะนั้น cmd.exe ทำงานผิดพลาด
+*.bat text eol=crlf
+
+# สคริปต์เชลล์และไฟล์โปรแกรมภาษาไทยต้องเป็น LF เสมอ
+*.sh   text eol=lf
+*.th   text eol=lf
+bin/thpro text eol=lf
