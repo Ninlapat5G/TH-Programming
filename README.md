@@ -66,7 +66,7 @@ thpro doctor
 ```
 
 ```
-TH-Programming v2.0.0 — เขียนโปรแกรมด้วยภาษาไทย
+TH-Programming v1.0.0 — เขียนโปรแกรมด้วยภาษาไทย
 
 [ผ่าน] Python 3.13.13 (ต้องการ 3.8 ขึ้นไป)
 [ผ่าน] การเข้ารหัสหน้าจอ: utf-8
@@ -667,4 +667,4 @@ python -m unittest discover -s tests -v
 
 ## สัญญาอนุญาต
 
-Apache License 2.0 — ดูรายละเอียดในไฟล์ [LICENSE](LICENSE)
+MIT — ดูรายละเอียดในไฟล์ [LICENSE](LICENSE)
