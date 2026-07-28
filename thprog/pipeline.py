@@ -116,7 +116,7 @@ def compile_source(source, name="<th>", predefined=None, segmenter=None,
     # ---- 5. ความหมาย ส่วนที่ 1: ผูกชื่อกับสัญลักษณ์
     # วิเคราะห์ต่อแม้ไวยากรณ์จะพังบางบรรทัด เพื่อรายงานปัญหาให้ครบในรอบเดียว
     # (บรรทัดที่พังถูกข้ามไปแล้ว จึงไม่สร้างข้อผิดพลาดลูกโซ่)
-    analyze(ast, bag, predefined, report_unused=not auto_show)
+    analyze(ast, bag, predefined, live=auto_show)
 
     # ---- 6. ความหมาย ส่วนที่ 2: ชนิดข้อมูล
     # ข้ามเมื่อผูกชื่อไม่ผ่าน เพราะชนิดของชื่อที่ไม่มีจริงย่อมเดาไม่ได้

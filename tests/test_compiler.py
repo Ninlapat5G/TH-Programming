@@ -38,6 +38,14 @@ def py(src, optimize=0):
     return "\n".join(l for l in lines[start:] if l.strip()).strip()
 
 
+def check_source_live(src):
+    """ตรวจแบบ "โหมดพิมพ์สด" เหมือนตอนสั่ง  thprog "โค้ด"  จากบรรทัดคำสั่ง"""
+    try:
+        return compile_source(src, "<คำสั่ง>", auto_show=True).diagnostics
+    except CompileError as err:
+        return err.bag
+
+
 def out(src):
     program = compile_source(src, "<test>")
     buf = io.StringIO()
@@ -391,6 +399,32 @@ class TestCommandLineSource(unittest.TestCase):
         status, output = self._run(["สร้างคลัง", "str"])
         self.assertEqual(status, 0)
         self.assertIn("นำเข้าวิธี strip เป็น______", output)
+
+    # ---------------------------------------------- เชลล์กินเครื่องหมายคำพูด
+    def _hint_of(self, argv):
+        bag = check_source_live(argv)
+        return "".join(d.hint or "" for d in bag)
+
+    def test_eaten_quotes_get_a_shell_hint(self):
+        """cmd.exe แกะ  "แสดง"สวัสดี""  เหลือแค่  แสดงสวัสดี  ก่อนถึงคอมไพเลอร์"""
+        self.assertIn("เชลล์กินไป", self._hint_of("แสดงผลสวัสดี"))
+
+    def test_no_shell_hint_when_quotes_survived(self):
+        self.assertNotIn("เชลล์กินไป", self._hint_of('แสดงผล "สวัสดี" บวก ก'))
+
+    def test_no_shell_hint_for_a_real_expression(self):
+        """ตัวแปรไม่มีจริงในนิพจน์ — ไม่เกี่ยวกับเชลล์ ต้องไม่ไปกวน"""
+        self.assertNotIn("เชลล์กินไป", self._hint_of("แสดง ราคา คูณ 2"))
+
+    def test_no_shell_hint_for_multi_statement(self):
+        self.assertNotIn("เชลล์กินไป",
+                         self._hint_of("ให้ราคาเป็น 5 แล้วแสดงยอดที่ไม่มี"))
+
+    def test_no_shell_hint_when_compiling_a_file(self):
+        """ไฟล์ .th ไม่ได้ผ่านเชลล์ จึงต้องไม่มีคำใบ้นี้เลย"""
+        self.assertNotIn("เชลล์กินไป",
+                         "".join(d.hint or "" for d in
+                                 check_source("แสดงผลสวัสดี", "<test>")))
 
     def test_make_library_unknown_module(self):
         status, _ = self._run(["สร้างคลัง", "ไม่มีโมดูลนี้_zz"])

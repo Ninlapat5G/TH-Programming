@@ -36,11 +36,12 @@ def _module_installed(module):
 
 
 class Analyzer:
-    def __init__(self, bag, predefined=None, report_unused=True):
+    def __init__(self, bag, predefined=None, live=False):
         self.bag = bag
         # โหมดพิมพ์สด (REPL / -c) ไม่ควรเตือนว่า "ตัวแปรไม่ได้ใช้"
         # เพราะผู้ใช้กำลังจะพิมพ์บรรทัดถัดไปที่เอาไปใช้อยู่แล้ว
-        self.report_unused = report_unused
+        self.live = live
+        self.report_unused = not live
         self.table = SymbolTable(predefined)
         self.functions = {}          # ชื่อ -> (จำนวนพารามิเตอร์, บรรทัดที่ประกาศ)
         self.assigned_anywhere = set(predefined or ())
@@ -51,9 +52,14 @@ class Analyzer:
         self.from_library = set()
         # เมธอด Python -> คำไทยที่ใช้แทนได้ (จากคลังคำที่โหลดไว้ในโปรแกรมนี้)
         self.thai_for_method = {}
+        # ชื่อที่ถูกส่งให้ แสดง แบบเดี่ยว ๆ — ใช้เดาว่าเชลล์กินฟันหนูไปหรือเปล่า
+        self.printed_names = set()
+        self.single_statement = False
 
     # ================================================== ทางเข้า
     def run(self, program):
+        # ทั้งโปรแกรมเป็นคำสั่งเดียว = รูปร่างของ  thprog "แสดง...."  ที่พิมพ์สด
+        self.single_statement = len(program.body) == 1
         self._collect(program.body)
         for name, (arity, line) in self.functions.items():
             self.table.declare_global(name, FUNCTION, line, arity)
@@ -116,6 +122,8 @@ class Analyzer:
     def stmt(self, node):
         if isinstance(node, A.Print):
             for value in node.values:
+                if isinstance(value, A.Name):
+                    self.printed_names.add(value.ident)
                 self.expr(value)
 
         elif isinstance(node, A.Assign):
@@ -319,14 +327,41 @@ class Analyzer:
                        length=len(name))
         else:
             guess = suggest(name, self.assigned_anywhere | set(BUILTINS), 0.6)
+            hint = (f'หมายถึง "{guess}" หรือเปล่า?' if guess else
+                    f"ลองเขียน  ให้{name}เป็น <ค่า>  ก่อนใช้งาน")
+            extra = self._quote_hint(name)
             self._error(Code.UNDEFINED_NAME, node,
                         f'ยังไม่เคยกำหนดค่าให้ตัวแปร "{name}"',
                         length=len(name),
-                        hint=(f'หมายถึง "{guess}" หรือเปล่า?' if guess else
-                              f"ลองเขียน  ให้{name}เป็น <ค่า>  ก่อนใช้งาน"))
+                        hint=f"{hint}\n       {extra}" if extra else hint)
         # ประกาศทิ้งไว้ กันไม่ให้ฟ้องซ้ำทุกบรรทัดที่ใช้ชื่อเดิม
         symbol = self.table.declare(name, VARIABLE, node.line)
         symbol.reads += 1
+
+    def _quote_hint(self, name):
+        """กับดักคลาสสิกของการพิมพ์โค้ดลงบรรทัดคำสั่ง — เชลล์กินฟันหนูไป
+
+            thprog "แสดง"สวัสดี""       cmd.exe ส่งมาแค่  แสดงสวัสดี
+
+        คอมไพเลอร์เห็นแต่ผลลัพธ์หลังเชลล์แกะแล้ว จึงบอกได้แค่ว่า "สวัสดี"
+        เป็นตัวแปรที่ไม่รู้จัก ซึ่งถูกต้องแต่ไม่ช่วยให้เดาต้นเหตุออก
+
+        เงื่อนไขแคบสามข้อ เพื่อไม่ให้ไปรบกวนกรณีที่ตัวแปรไม่มีจริง ๆ
+            1. โหมดพิมพ์สด (-c / stdin) เท่านั้น — ไฟล์ .th ไม่ผ่านเชลล์
+            2. ทั้งโปรแกรมเป็นคำสั่งเดียว และไม่มีเครื่องหมายคำพูดเหลือเลยสักตัว
+            3. ชื่อนั้นถูกส่งให้คำสั่ง แสดง แบบเดี่ยว ๆ ไม่ได้อยู่ในนิพจน์
+
+        และเป็นคำแนะนำ *เสริม* ต่อท้ายของเดิม ไม่ได้ไปแทนที่
+        """
+        if not (self.live and self.single_statement):
+            return None
+        if name not in self.printed_names:
+            return None
+        if any(q in line for line in self.bag.lines for q in "\"'“”‘’"):
+            return None
+        return ('ถ้าตั้งใจให้เป็นข้อความ เครื่องหมายคำพูดน่าจะถูกเชลล์กินไป '
+                '— บน cmd ใช้ฟันหนูเดี่ยวข้างใน เช่น  '
+                'thprog "แสดง \'สวัสดี\'"')
 
     def _report_unused(self, scope):
         if not self.report_unused:
@@ -375,5 +410,5 @@ def _name_of(target):
     return target.ident if isinstance(target, A.Name) else str(target)
 
 
-def analyze(program, bag, predefined=None, report_unused=True):
-    return Analyzer(bag, predefined, report_unused).run(program)
+def analyze(program, bag, predefined=None, live=False):
+    return Analyzer(bag, predefined, live).run(program)
