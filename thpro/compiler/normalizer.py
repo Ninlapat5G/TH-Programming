@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-ขั้นที่ 2 : Normalizer — ชั้น NLP เชิงสัญลักษณ์
+ขั้นที่ 3 : Normalizer — ชั้น NLP เชิงสัญลักษณ์
 
   1) รวมวลีหลายคำเป็นโทเคนเดียว (longest-match)
          "มากกว่า หรือ เท่ากับ"  ->  GE
          "ไม่ งั้น"              ->  ELSE
   2) ตัดคำเสริมที่ไม่มีผลต่อความหมาย  ("ว่า" "นะ" "ครับ" ...)
-  3) เดาคำที่พิมพ์ผิดด้วยการวัดความคล้าย (ใช้เมื่อจับรูปประโยคไม่ได้)
+  3) ตัดหน่วยและลักษณนามที่ตามหลังตัวเลข  ("0 บาท" -> 0)
+  4) เดาคำที่พิมพ์ผิดด้วยการวัดความคล้าย (ใช้เมื่อจับรูปประโยคไม่ได้)
 """
 
 import difflib
@@ -37,12 +38,20 @@ def collapse_phrases(tokens):
     return out
 
 
+def _is_polite(tok):
+    return (tok.kind == "WORD" and not tok.ids
+            and tok.text in lexicon.POLITE)
+
+
 def drop_fillers(tokens, aggressive=False):
     """ตัดคำเสริมออก
 
     ปกติจะตัดเฉพาะคำที่ไม่ได้ทำหน้าที่เป็นคีย์เวิร์ด เพื่อไม่ให้คำอย่าง "ด้วย"
     (ซึ่งใช้ส่งอาร์กิวเมนต์) หายไป  แต่เมื่อจับรูปประโยคไม่ได้เลย
     จะลองตัดแบบเข้มข้นอีกรอบ
+
+    ส่วนคำลงท้ายประโยค (ครับ ค่ะ นะ) ตัดจาก **ท้ายประโยคเข้ามา** เท่านั้น
+    ถ้าตัดได้ทุกตำแหน่งจะกินพยางค์แรกของชื่อตัวแปร ("คะแนน" -> "แนน")
     """
     keep = []
     for tok in tokens:
@@ -50,11 +59,32 @@ def drop_fillers(tokens, aggressive=False):
             if aggressive or not tok.ids:
                 continue
         keep.append(tok)
+    while keep and _is_polite(keep[-1]):
+        keep.pop()
+    return keep
+
+
+def drop_units(tokens):
+    """ตัดหน่วย/ลักษณนามที่ "ตามหลังตัวเลขโดยตรง" ออก
+
+        มีเงิน 0 บาท      ->  มี เงิน 0
+        ให้ราคาเป็น50บาท   ->  ให้ ราคา เป็น 50
+
+    เงื่อนไขว่าต้องตามหลังตัวเลขคือสิ่งที่ทำให้กฎนี้ปลอดภัย เพราะคำอย่าง
+    "คน" "ชิ้น" "วัน" คนไทยเอาไปตั้งเป็นชื่อตัวแปรกันทั้งนั้น
+    ตัวที่ทำหน้าที่เป็นคีย์เวิร์ดอยู่แล้ว (มี ids) จะไม่ถูกแตะ
+    """
+    keep = []
+    for tok in tokens:
+        if (tok.kind == "WORD" and not tok.ids and tok.text in lexicon.UNITS
+                and keep and keep[-1].kind == "NUMBER"):
+            continue
+        keep.append(tok)
     return keep
 
 
 def normalize(tokens, aggressive=False):
-    return drop_fillers(collapse_phrases(tokens), aggressive)
+    return drop_units(drop_fillers(collapse_phrases(tokens), aggressive))
 
 
 # ---------------------------------------------------------------- เดาคำผิด

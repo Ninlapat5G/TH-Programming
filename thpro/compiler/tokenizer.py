@@ -23,7 +23,7 @@ THAI_DIGITS = "๐๑๒๓๔๕๖๗๘๙"
 QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”", "‘": "’"}
 
 TWO_CHAR_OPS = ("==", "!=", ">=", "<=", "//", "**")
-ONE_CHAR_OPS = "+-*/%=<>()[]{},:"
+ONE_CHAR_OPS = "+-*/%=<>()[]{},:;"
 
 COMMENT_WORDS = ("หมายเหตุ", "คอมเมนต์", "อธิบาย")
 
@@ -124,6 +124,12 @@ def _scan(text, lineno, raw):
         ch = text[i]
 
         if ch.isspace():
+            # คอมเมนต์ท้ายบรรทัดแบบไทย ๆ:  ให้กเป็น1    หมายเหตุ อธิบาย
+            # บังคับว่าต้องมีช่องว่างนำหน้า จึงไม่มีทางไปตัดกลางชื่อตัวแปร
+            # ที่บังเอิญมีคำว่า "หมายเหตุ" อยู่ข้างใน
+            rest = text[i:].lstrip()
+            if any(rest.startswith(word) for word in COMMENT_WORDS):
+                break
             i += 1
             continue
 

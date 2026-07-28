@@ -18,8 +18,6 @@ from thpro.pipeline import run                                    # noqa: E402
 from thpro.errors import CompileError, RuntimeThaiError           # noqa: E402
 from thpro.diagnostics import Code                                # noqa: E402
 from thpro.compiler import tcc                                    # noqa: E402
-from thpro.compiler.symbols import SymbolTable, FUNCTION          # noqa: E402
-from thpro.cli import _format                                     # noqa: E402
 
 
 def codes(src):
@@ -38,8 +36,14 @@ def py(src, optimize=0):
     return "\n".join(l for l in lines[start:] if l.strip()).strip()
 
 
-def expr_py(expression, names=("ก", "ข", "ค", "รายชื่อ")):
+def expr_py(expression, names=("ก", "ข", "ค")):
+    """คอมไพล์นิพจน์เดี่ยว ๆ โดยประกาศตัวแปรที่ใช้บ่อยไว้ให้ก่อน
+
+    "รายชื่อ" ต้องเป็นรายการจริง ๆ ไม่ใช่ตัวเลข มิฉะนั้นตัวตรวจชนิดจะฟ้อง
+    (ถูกต้องแล้ว เพราะ ความยาว(1) พังตอนรันจริง)
+    """
     setup = "".join(f"ให้ {n} เป็น 1\n" for n in names)
+    setup += 'ให้ รายชื่อ เป็น ["ก", "ข"]\n'
     return py(setup + f"ให้ ผล เป็น {expression}").splitlines()[-1]
 
 
@@ -134,6 +138,17 @@ class TestBasics(unittest.TestCase):
     def test_filler_words_ignored(self):
         self.assertEqual(py('แสดงว่า"ก"นะครับ'), 'print("ก")')
 
+    def test_polite_particle_only_dropped_at_the_end(self):
+        """"คะ" ต้องไม่กินพยางค์แรกของชื่อตัวแปร ("คะแนน" -> "แนน")"""
+        self.assertEqual(py("คะแนน เท่ากับ 10"), "คะแนน = 10")
+        self.assertEqual(py("ให้คะแนนความอร่อยเป็น10"), "คะแนนความอร่อย = 10")
+        self.assertEqual(py("ให้สิบเป็น10"), "สิบ = 10")
+
+    def test_polite_particle_still_dropped_when_trailing(self):
+        for src in ('แสดง"ก"ครับ', 'แสดง"ก"นะ', 'แสดง"ก"หน่อยนะครับ'):
+            with self.subTest(src=src):
+                self.assertEqual(py(src), 'print("ก")')
+
     def test_assign_forms(self):
         for src in ["ให้ค่าเป็น5", "กำหนดให้ค่าคือ5", "ตั้งค่าเท่ากับ5",
                     "ค่า=5", "ค่ามีค่าเป็น5", "เก็บ5ไว้ในค่า"]:
@@ -153,6 +168,18 @@ class TestBasics(unittest.TestCase):
     def test_comments(self):
         self.assertEqual(py("หมายเหตุ อธิบายเฉย ๆ\nแสดง1 # ท้ายบรรทัด"),
                          "print(1)")
+
+    def test_thai_trailing_comment(self):
+        """คอมเมนต์ท้ายบรรทัดเขียนเป็นภาษาไทยได้ ไม่ต้องใช้ # เท่านั้น"""
+        for src in ("แสดง1    หมายเหตุ อธิบาย",
+                    "แสดง1    อธิบาย ว่าทำอะไร",
+                    "แสดง1    คอมเมนต์ อะไรก็ได้"):
+            with self.subTest(src=src):
+                self.assertEqual(py(src), "print(1)")
+
+    def test_comment_word_inside_a_name_is_not_a_comment(self):
+        """ต้องมีช่องว่างนำหน้าเท่านั้น มิฉะนั้นชื่อตัวแปรจะถูกตัดกลางคำ"""
+        self.assertEqual(out("ให้หมายเหตุสำคัญเป็น 5\nแสดงหมายเหตุสำคัญ"), "5\n")
 
 
 # ====================================================== นิพจน์
@@ -181,7 +208,7 @@ class TestExpressions(unittest.TestCase):
     def test_collections(self):
         self.assertEqual(py("ให้ผลเป็น[1,2,3]"), "ผล = [1, 2, 3]")
         self.assertEqual(py('ให้ผลเป็น{"ก":1}'), 'ผล = {"ก": 1}')
-        self.assertEqual(expr_py("ก[0]"), "ผล = ก[0]")
+        self.assertEqual(expr_py("รายชื่อ[0]"), "ผล = รายชื่อ[0]")
 
     def test_of_call_form(self):
         self.assertEqual(expr_py("ความยาวของรายชื่อ"), "ผล = len(รายชื่อ)")
@@ -351,6 +378,405 @@ class TestIOAndBuiltins(unittest.TestCase):
 
     def test_builtin_not_shadowed_by_variable(self):
         self.assertEqual(out("ให้ผลรวมเป็น0\nเพิ่มผลรวมอีก5\nแสดงผลรวม"), "5\n")
+
+
+# ====================================================== เขียนตามหลักไวยากรณ์ไทย
+class TestThaiOrthography(unittest.TestCase):
+    """เขียนเป็นประโยคภาษาไทยจริง ๆ ตามหลักการเขียน
+
+        คะแนนเท่ากับ 10        ← คำในวลีเดียวกันเขียนติดกัน
+                                  เว้นวรรคหน้าตัวเลข/ข้อความ
+
+    ภาษาไทยไม่เว้นวรรคระหว่างคำในวลีเดียวกัน จะเว้นก็ต่อเมื่อขึ้นอนุประโยคใหม่
+    หรือหน้าตัวเลข/เครื่องหมายคำพูด  นี่คือสไตล์หลักที่ภาษานี้ต้องรองรับ
+    """
+
+    def test_assign(self):
+        for src in ("คะแนนเท่ากับ 10", "ให้คะแนนเป็น 10",
+                    "กำหนดให้คะแนนคือ 10", "มีคะแนน 10"):
+            with self.subTest(src=src):
+                self.assertEqual(py(src), "คะแนน = 10")
+
+    def test_print(self):
+        self.assertEqual(out('ให้ยอดเงินเป็น 1\nแสดง "ค่า:", ยอดเงิน'),
+                         "ค่า: 1\n")
+
+    def test_expression_statement(self):
+        src = ("ให้ราคาเป็น 50\n"
+               "ให้จำนวนชิ้นเป็น 3\n"
+               "ให้ราคารวมเป็นราคาคูณจำนวนชิ้น\n"
+               "แสดงราคารวม")
+        self.assertEqual(out(src), "150\n")
+
+    def test_condition(self):
+        src = ('ให้คะแนนเป็น 80\n'
+               'ถ้าคะแนนมากกว่าหรือเท่ากับ 50\n'
+               '    แสดง "ผ่าน"\n'
+               'ไม่งั้น\n'
+               '    แสดง "ไม่ผ่าน"')
+        self.assertEqual(out(src), "ผ่าน\n")
+
+    def test_inline_condition(self):
+        self.assertEqual(
+            out('คะแนนเท่ากับ 85\nถ้าคะแนนมากกว่าหรือเท่ากับ 80 แล้วแสดง "ผ่าน"'),
+            "ผ่าน\n")
+
+    def test_loops(self):
+        self.assertEqual(out('ทำซ้ำ 3 ครั้ง\n    แสดง "ฮา"'), "ฮา\nฮา\nฮา\n")
+        self.assertEqual(out("นับรอบจาก 1 ถึง 3\n    แสดงรอบ"), "1\n2\n3\n")
+        self.assertEqual(
+            out("ให้เงินเป็น 4\nตราบใดที่เงินมากกว่า 0\n"
+                "    ลดเงินลง 2\nแสดงเงิน"), "0\n")
+
+    def test_function(self):
+        src = ("ฟังก์ชันบวกเลขรับตัวแรกและตัวหลัง\n"
+               "    คืนค่าตัวแรกบวกตัวหลัง\n"
+               "แสดงบวกเลข(2, 3)")
+        self.assertEqual(out(src), "5\n")
+
+    def test_collections(self):
+        src = 'ให้เมนูเป็น ["ก", "ข"]\nแสดงความยาวของเมนู'
+        self.assertEqual(out(src), "2\n")
+
+
+# ====================================================== ตัด/หยิบชิ้นส่วน
+class TestSlicing(unittest.TestCase):
+    """ตัดข้อความและรายการได้ยืดหยุ่นแบบ Python โดยไม่ต้องรู้จักไวยากรณ์สไลซ์"""
+
+    TEXT = 'ให้ชื่อเป็น "สมชาย"\n'
+    LIST = "ให้เมนูเป็น [1,2,3,4]\n"
+
+    def test_drop_from_the_end(self):
+        self.assertEqual(out(self.TEXT + "แสดงตัดท้าย(ชื่อ)"), "สมชา\n")
+        self.assertEqual(out(self.TEXT + "แสดงตัดท้าย(ชื่อ,2)"), "สมช\n")
+
+    def test_drop_from_the_front(self):
+        self.assertEqual(out(self.TEXT + "แสดงตัดตัวแรก(ชื่อ)"), "มชาย\n")
+        self.assertEqual(out(self.TEXT + "แสดงตัดหน้า(ชื่อ,2)"), "ชาย\n")
+
+    def test_first_and_last(self):
+        self.assertEqual(out(self.TEXT + "แสดงตัวแรก(ชื่อ)"), "ส\n")
+        self.assertEqual(out(self.TEXT + "แสดงตัวสุดท้าย(ชื่อ)"), "ย\n")
+
+    def test_slice_range(self):
+        self.assertEqual(out(self.TEXT + "แสดงตัดเอา(ชื่อ,1,3)"), "มช\n")
+
+    def test_delete_characters(self):
+        self.assertEqual(out(self.TEXT + 'แสดงลบตัวอักษร(ชื่อ,"ช")'), "สมาย\n")
+
+    def test_count_occurrences(self):
+        self.assertEqual(out(self.TEXT + 'แสดงนับจำนวน(ชื่อ,"ม")'), "1\n")
+
+    def test_same_words_work_on_lists(self):
+        """คำเดียวกันใช้กับรายการได้ด้วย — ยืดหยุ่นแบบ Python"""
+        self.assertEqual(out(self.LIST + "แสดงตัดท้าย(เมนู)"), "[1, 2, 3]\n")
+        self.assertEqual(out(self.LIST + "แสดงตัวแรก(เมนู)"), "1\n")
+        self.assertEqual(out(self.LIST + "แสดงลบทุกตัวที่เป็น(เมนู,2)"),
+                         "[1, 3, 4]\n")
+
+    def test_zero_is_not_treated_as_everything(self):
+        """ตัดท้าย 0 ตัว ต้องได้ของเดิม ไม่ใช่ค่าว่าง (กับดักของ seq[:-0])"""
+        self.assertEqual(out(self.TEXT + "แสดงตัดท้าย(ชื่อ,0)"), "สมชาย\n")
+
+    def test_negative_index_still_works(self):
+        self.assertEqual(out(self.TEXT + "แสดงชื่อ[-1]"), "ย\n")
+
+    def test_hint_points_at_the_right_tool(self):
+        """เขียน ข้อความ ลบ เลข ต้องได้คำแนะนำที่ใช้งานได้จริง"""
+        found = errors(self.TEXT + "แสดงชื่อลบ 1")
+        self.assertEqual(len(found), 1)
+        self.assertIn("ตัดท้าย", found[0].hint)
+
+    def test_ask(self):
+        self.assertEqual(py('ถามว่า "ชื่อ?" เก็บในชื่อ'),
+                         'ชื่อ = input("ชื่อ?")')
+
+    def test_inc_dec(self):
+        self.assertEqual(py("ให้คะแนนเป็น 1\nเพิ่มคะแนนอีก 10").splitlines()[-1],
+                         "คะแนน += 10")
+        self.assertEqual(py("ให้เงินเป็น 1\nลดเงินลง 45").splitlines()[-1],
+                         "เงิน -= 45")
+
+    def test_split_clauses(self):
+        self.assertEqual(
+            out("ให้เงินเป็น 500 แล้วลดเงินลง 45 แล้วแสดงเงิน"), "455\n")
+
+    def test_have_with_unit_and_clauses(self):
+        self.assertEqual(
+            out("มีเงิน 500 บาท แล้วลดเงินลง 45 แล้วแสดงเงิน"), "455\n")
+
+    def test_spacing_before_number_is_optional(self):
+        """เว้นวรรคหน้าตัวเลขหรือไม่เว้น ต้องได้โค้ดเดียวกันเป๊ะ"""
+        pairs = [("ให้ราคาเป็น250", "ให้ราคาเป็น 250"),
+                 ("มีเงิน500บาท", "มีเงิน 500 บาท"),
+                 ("เพิ่มคะแนนอีก10", "เพิ่มคะแนนอีก 10"),
+                 ("ทำซ้ำ3ครั้ง\n    แสดง1", "ทำซ้ำ 3 ครั้ง\n    แสดง 1")]
+        for tight, spaced in pairs:
+            with self.subTest(spaced=spaced):
+                self.assertEqual(py(tight), py(spaced))
+
+
+# ====================================================== หน่วยและลักษณนาม
+class TestUnits(unittest.TestCase):
+    """หน่วยที่ตามหลังตัวเลขต้องถูกตัดทิ้ง แต่ต้องไม่แตะชื่อตัวแปร"""
+
+    def test_unit_after_number_dropped(self):
+        self.assertEqual(py("ให้ราคาเป็น50บาท"), "ราคา = 50")
+
+    def test_unit_with_spaces(self):
+        self.assertEqual(py("ให้เวลาเป็น 90 นาที"), "เวลา = 90")
+
+    def test_decimal_with_unit(self):
+        self.assertEqual(py("ให้น้ำหนักเป็น52.5กิโลกรัม"), "น้ำหนัก = 52.5")
+
+    def test_unit_word_still_usable_as_name(self):
+        """ให้ชิ้นเป็น5 — "ชิ้น" ไม่ได้ตามหลังตัวเลข จึงเป็นชื่อตัวแปรตามปกติ"""
+        self.assertEqual(py("ให้ชิ้นเป็น5"), "ชิ้น = 5")
+        self.assertEqual(out("ให้คนเป็น3\nแสดงคน"), "3\n")
+
+    def test_times_keyword_is_not_a_unit(self):
+        """"ครั้ง" ต้องยังเป็นคีย์เวิร์ดของ ทำซ้ำ ไม่ใช่หน่วยที่ถูกตัดทิ้ง"""
+        self.assertEqual(out('ทำซ้ำ2ครั้ง\n    แสดง"ฮา"'), "ฮา\nฮา\n")
+
+    def test_percent_is_still_modulo(self):
+        self.assertEqual(out("แสดง10 % 3"), "1\n")
+
+    def test_unit_does_not_fragment_names(self):
+        """"ตัว" เป็นหน่วย แต่ "ตัวแรก" ต้องไม่ถูกซอยเป็น ตัว|แรก"""
+        self.assertEqual(out("ให้ตัวแรกเป็น9\nแสดงตัวแรก"), "9\n")
+
+    def test_multisyllable_unit_not_chopped(self):
+        """"คะแนน" เคยถูกซอยเป็น "คะ"(คำเสริม) + "แนน" """
+        self.assertEqual(out("มีคะแนน 80 คะแนน\nแสดงคะแนน"), "80\n")
+
+
+# ====================================================== ประโยคบอกเล่า "มี"
+class TestHaveStatement(unittest.TestCase):
+
+    def test_have_with_unit(self):
+        self.assertEqual(py("มีเงิน 0 บาท"), "เงิน = 0")
+
+    def test_have_without_space(self):
+        self.assertEqual(py("มีเงิน100บาท"), "เงิน = 100")
+
+    def test_have_with_be(self):
+        self.assertEqual(py("มีเงินเป็น50"), "เงิน = 50")
+
+    def test_have_synonyms(self):
+        for src in ("มีนักเรียน 30 คน", "มีทั้งหมดนักเรียน30คน",
+                    "เริ่มด้วยนักเรียน30คน"):
+            with self.subTest(src=src):
+                self.assertEqual(py(src), "นักเรียน = 30")
+
+    def test_have_expression(self):
+        self.assertEqual(out("มีราคา45บาท\nมียอดรวมราคาคูณ3\nแสดงยอดรวม"),
+                         "135\n")
+
+    def test_contains_builtin_not_broken_by_have(self):
+        """"มีอยู่" ต้องยังเป็นฟังก์ชันสำเร็จรูป ไม่ถูกซอยเป็น "มี" + "อยู่" """
+        self.assertEqual(out('แสดงมีอยู่([1,2,3],2)'), "True\n")
+
+
+# ====================================================== การตัดประโยค
+class TestSentenceSplitting(unittest.TestCase):
+    """หนึ่งบรรทัดมีได้หลายคำสั่ง"""
+
+    def test_split_on_semicolon(self):
+        self.assertEqual(out("ให้เงินเป็น0; แสดงเงิน"), "0\n")
+
+    def test_split_on_laeo(self):
+        self.assertEqual(out("ให้เงินเป็น0 แล้วแสดงเงิน"), "0\n")
+
+    def test_split_no_spaces_at_all(self):
+        self.assertEqual(out("มีเงิน100บาทแล้วลดเงินลง45แล้วแสดงเงิน"), "55\n")
+
+    def test_split_on_other_separators(self):
+        self.assertEqual(out("ให้aเป็น2 จากนั้น แสดงa"), "2\n")
+        self.assertEqual(out("ให้aเป็น2 หลังจากนั้น แสดงa"), "2\n")
+
+    def test_many_statements_one_line(self):
+        src = ("ให้aเป็น1 แล้วให้bเป็น2 แล้วให้cเป็น3 "
+               "แล้วให้dเป็น4 แล้วให้eเป็น5 แล้วแสดงaบวกe")
+        self.assertEqual(out(src), "6\n")
+
+    def test_split_without_separator_word(self):
+        """ตัดที่คำขึ้นต้นคำสั่งได้ แม้ไม่มีตัวคั่น"""
+        self.assertEqual(out('แสดง"ก" แสดง"ข"'), "ก\nข\n")
+
+    def test_split_inside_block(self):
+        src = 'ถ้าจริง\n    ให้aเป็น7 แล้ว แสดงa'
+        self.assertEqual(out(src), "7\n")
+
+    def test_append_and_show(self):
+        src = "มีตะกร้าเป็น[] แล้ว เพิ่ม5เข้าไปในตะกร้า แล้ว แสดงตะกร้า"
+        self.assertEqual(out(src), "[5]\n")
+
+    def test_name_learned_within_the_same_line(self):
+        """ประโยคหลังต้องตัดคำชื่อที่ประโยคแรกเพิ่งประกาศได้ถูกต้อง
+
+        "รายการโปรด" จะถูกตัดผิดเป็น "ในรายการ|โปรด" ถ้าไม่เรียนรู้ชื่อ
+        จากประโยคแรกก่อน
+        """
+        src = ('มีรายการโปรดเป็น[] แล้ว เพิ่ม"ลาเต้"เข้าไปในรายการโปรด'
+               ' แล้ว แสดงรายการโปรด')
+        self.assertEqual(out(src), "['ลาเต้']\n")
+
+    def test_single_statement_always_wins(self):
+        """"แล้ว" ในรูปประโยคเงื่อนไขต้องยังเป็น THEN ไม่ใช่ตัวคั่นประโยค"""
+        self.assertEqual(py('ถ้า5มากกว่า3แล้วแสดง"ใช่"'),
+                         'if 5 > 3:\n    print("ใช่")')
+
+    def test_block_opener_cannot_be_split_target(self):
+        """คำสั่งที่ต้องมีบล็อกของตัวเอง ห้ามถูกตัดมาต่อท้ายบรรทัด
+
+        ต้องฟ้อง ไม่ใช่เงียบ ๆ สร้างบล็อกที่ไม่มีเนื้อใน
+        """
+        for src in ('แสดง"ก" แล้ว ทำซ้ำ2ครั้ง', 'แสดง"ก" แล้ว ถ้า5มากกว่า3'):
+            with self.subTest(src=src):
+                self.assertTrue(codes(src), "ควรรายงานข้อผิดพลาด")
+
+
+# ====================================================== คำสงวน vs ชื่อที่ตั้งเอง
+class TestReservedWords(unittest.TestCase):
+    """เส้นแบ่งระหว่าง "คำของภาษา" กับ "ชื่อที่ผู้ใช้ตั้ง" """
+
+    def test_soft_keywords_can_be_names(self):
+        """คำเชื่อมที่คนไทยเอาไปตั้งชื่อบ่อย ต้องตั้งได้ — ตำแหน่งเป็นตัวตัดสิน"""
+        for word in ("รอบ", "ใน", "ถึง", "ด้วย", "จาก", "ครั้ง"):
+            with self.subTest(word=word):
+                self.assertEqual(out(f"ให้{word}เป็น 3\nแสดง{word}"), "3\n")
+
+    def test_builtins_can_be_shadowed(self):
+        self.assertEqual(out("ให้ยอดรวมเป็น 3\nแสดงยอดรวม"), "3\n")
+
+    def test_hard_keywords_are_rejected_not_swallowed(self):
+        """ตั้งชื่อชนตัวดำเนินการ/คำสั่ง ต้อง *ฟ้อง*
+
+        ห้ามเงียบแล้วกลืนคีย์เวิร์ดเข้าไปเป็นชื่อ (ให้บวก = 3)
+        เพราะผู้ใช้จะไม่มีทางรู้ว่าเกิดอะไรขึ้น
+        """
+        for word in ("บวก", "คูณ", "แสดง", "ถ้า"):
+            with self.subTest(word=word):
+                found = errors(f"ให้{word}เป็น 3")
+                self.assertEqual([d.code for d in found],
+                                 [Code.RESERVED_AS_NAME])
+                self.assertIn(word, found[0].message)
+
+    def test_names_containing_keywords_are_fine(self):
+        """ชื่อที่มีคำสงวนซ่อนอยู่ข้างใน ต้องไม่ถูกแตะ"""
+        for name in ("ผลบวก", "นับถอยหลัง", "มีเงิน", "ทำงาน", "ตัวแรก",
+                     "ราคารวม", "ลดราคา", "เก็บของ"):
+            with self.subTest(name=name):
+                self.assertEqual(errors(f"ให้{name}เป็น 3\nแสดง{name}"), [])
+
+
+# ====================================================== ตัวตรวจชนิดข้อมูล
+def errors(src):
+    return [d for d in check_source(src, "<test>") if d.severity == "error"]
+
+
+def check_source_with(src, predefined):
+    """ตรวจโดยประกาศชื่อ (และชนิด) ไว้ล่วงหน้า — จำลองโหมดโต้ตอบ"""
+    try:
+        return compile_source(src, "<test>", predefined).diagnostics
+    except CompileError as err:
+        return err.bag
+
+
+class TestTypeChecker(unittest.TestCase):
+    """จับการใช้ผิดชนิดตั้งแต่ตอนคอมไพล์ แทนที่จะไประเบิดตอนรัน"""
+
+    def test_string_arithmetic_rejected(self):
+        cases = [
+            ('ให้ชื่อเป็น "สมชาย"\nแสดงชื่อลบ 1', Code.BAD_OPERAND),
+            ('ให้ชื่อเป็น "ก"\nแสดงชื่อบวก 1', Code.BAD_OPERAND),
+            ('ให้ชื่อเป็น "ก"\nแสดงลบชื่อ', Code.BAD_OPERAND),
+            ('ให้เมนูเป็น [1]\nแสดง 10 หารเมนู', Code.BAD_OPERAND),
+        ]
+        for src, code in cases:
+            with self.subTest(src=src):
+                self.assertEqual([d.code for d in errors(src)], [code])
+
+    def test_comparing_different_types_rejected(self):
+        src = 'ให้ชื่อเป็น "ก"\nถ้าชื่อมากกว่า 5\n    แสดง 1'
+        self.assertEqual([d.code for d in errors(src)], [Code.BAD_OPERAND])
+
+    def test_indexing_a_number_rejected(self):
+        src = "ให้เลขเป็น 5\nแสดงเลข[0]"
+        self.assertEqual([d.code for d in errors(src)], [Code.NOT_INDEXABLE])
+
+    def test_builtin_argument_type_checked(self):
+        for src in ("ให้เลขเป็น 5\nแสดงความยาวของเลข",
+                    'ให้ชื่อเป็น "ก"\nแสดงผลรวม(ชื่อ)'):
+            with self.subTest(src=src):
+                self.assertEqual([d.code for d in errors(src)],
+                                 [Code.BAD_ARGUMENT_TYPE])
+
+    # ---------------------------------------------------------- ต้องไม่ฟ้องผิด
+    def test_valid_python_semantics_allowed(self):
+        """สิ่งที่ Python ทำได้จริง ต้องไม่ถูกฟ้อง"""
+        ok = [
+            'ให้กเป็น "ก"\nให้ขเป็น "ข"\nแสดงกบวกข',        # ต่อข้อความ
+            'ให้กเป็น "ก"\nแสดงกคูณ 3',                      # ทำซ้ำข้อความ
+            "ให้กเป็น [1]\nให้ขเป็น [2]\nแสดงกบวกข",        # ต่อรายการ
+            "ให้กเป็นจริง\nแสดงกบวก 1",                      # bool คำนวณได้
+            'ให้กเป็น "abc"\nแสดงก[0]',                      # ดัชนีข้อความ
+            'ให้กเป็น {"x":1}\nแสดงก["x"]',                  # ดัชนีพจนานุกรม
+            "ให้กเป็น 1.5\nถ้ากมากกว่า 1\n    แสดง 1",       # ทศนิยม vs เต็ม
+        ]
+        for src in ok:
+            with self.subTest(src=src):
+                self.assertEqual(errors(src), [])
+
+    def test_unknown_types_stay_silent(self):
+        """เดาชนิดไม่ได้ = ต้องเงียบ ไม่ใช่เดาสุ่มแล้วฟ้อง"""
+        quiet = [
+            # พารามิเตอร์ไม่มีชนิด
+            "ฟังก์ชันทดสอบรับค่า\n    แสดงค่าลบ 1\nเรียกทดสอบด้วย 5",
+            # ตัวแปรถูกกำหนดค่าสองชนิด -> ไม่ทราบ
+            'ให้กเป็น 1\nให้กเป็น "ข"\nแสดงกบวก "ค"',
+            # ฟังก์ชันคืนหลายชนิด -> ไม่ทราบ
+            'ฟังก์ชันฟรับก\n    ถ้ากมากกว่า 1\n        คืนค่า "ข"\n'
+            "    คืนค่า 1\nแสดงฟ(2)บวก 1",
+            # สมาชิกในรายการไม่ตามชนิด
+            "ให้เมนูเป็น [1,2]\nสำหรับแต่ละตัวในเมนู\n    แสดงตัวบวก 1",
+        ]
+        for src in quiet:
+            with self.subTest(src=src):
+                self.assertEqual(errors(src), [])
+
+    def test_inference_through_ask_and_calls(self):
+        self.assertEqual(
+            errors("ถามว่า \"อายุ\" เก็บในอายุเป็นตัวเลข\nแสดงอายุบวก 1"), [])
+        self.assertEqual(
+            errors("ฟังก์ชันสองรับก\n    คืนค่ากคูณ 2\nแสดงสอง(3)บวก 1"), [])
+
+    def test_user_variable_shadows_builtin_signature(self):
+        """ตั้งชื่อตัวแปรทับฟังก์ชันสำเร็จรูปได้ ต้องไม่เอาลายเซ็นไปตรวจ"""
+        self.assertEqual(errors("ให้ยอดรวมเป็น 5\nแสดงยอดรวมบวก 1"), [])
+
+    def test_repl_style_predefined_types(self):
+        """โหมดโต้ตอบส่งชนิดที่รู้แน่นอนมาให้ได้ (เพราะมีค่าจริงอยู่ในมือ)
+
+        ต้องตรวจได้เข้มเท่ากับตอนคอมไพล์ทั้งไฟล์ ไม่ใช่ปล่อยไปพังตอนรัน
+        """
+        from thpro.compiler.typecheck import type_of_value
+
+        self.assertEqual(type_of_value("ก"), "ข้อความ")
+        self.assertEqual(type_of_value(5), "จำนวนเต็ม")
+        self.assertEqual(type_of_value([1]), "รายการ")
+        self.assertIsNone(type_of_value(object()))
+
+        bag = check_source_with(("แสดงชื่อลบ 1"), {"ชื่อ": "ข้อความ"})
+        self.assertEqual([d.code for d in bag.errors], [Code.BAD_OPERAND])
+        # ไม่บอกชนิด = ไม่ทราบ = ต้องเงียบ
+        self.assertEqual(check_source_with("แสดงชื่อลบ 1", {"ชื่อ"}).errors, [])
+
+    def test_error_points_at_the_right_line(self):
+        src = 'แสดง "เริ่ม"\nให้ชื่อเป็น "ก"\nแสดงชื่อลบ 1'
+        found = errors(src)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].line, 3)
 
 
 # ====================================================== ชั้น NLP

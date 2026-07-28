@@ -14,7 +14,8 @@ from pathlib import Path
 from . import __version__
 from .diagnostics import Code
 from .errors import CompileError, ThaiError
-from .pipeline import compile_source, run, new_segmenter
+from .compiler.typecheck import type_of_value
+from .pipeline import check_source, compile_source, run, new_segmenter
 
 BANNER = f"TH-Programming v{__version__} — เขียนโปรแกรมด้วยภาษาไทย"
 SUBCOMMANDS = {"run", "show", "build", "check", "fmt", "new", "demo",
@@ -105,6 +106,16 @@ def cmd_build(args):
 
 
 def cmd_check(args):
+    """ตรวจอย่างเดียว ไม่รัน — รองรับผลลัพธ์แบบเครื่องอ่านได้ด้วย
+
+    โหมด --json ต้องไม่โยน CompileError ออกไป เพราะเครื่องมือภายนอก
+    ต้องได้ JSON ที่ parse ได้เสมอ ไม่ว่าคอมไพล์จะผ่านหรือไม่
+    """
+    if args.json:
+        bag = check_source(_read(args.file), args.file)
+        print(bag.to_json())
+        return 1 if bag.has_errors() else 0
+
     program = compile_source(_read(args.file), args.file)
     _report(program, args.color)
     bag = program.diagnostics
@@ -279,7 +290,10 @@ def cmd_repl(args):
         source = "\n".join(buffer)
 
         try:
-            known = {k for k in env if not k.startswith("_")}
+            # โหมดโต้ตอบรู้ "ค่าจริง" ของตัวแปรที่ประกาศไปแล้ว จึงบอกชนิดที่
+            # แน่นอนให้ตัวตรวจชนิดได้ ทำให้ตรวจได้เข้มเท่ากับตอนคอมไพล์ทั้งไฟล์
+            known = {k: type_of_value(v) for k, v in env.items()
+                     if not k.startswith("_")}
             program = compile_source(source, "<repl>", known, segmenter)
         except CompileError as err:
             # บล็อกยังไม่จบ -> รอบรรทัดถัดไป (เว้นแต่ผู้ใช้เคาะบรรทัดว่าง)
@@ -330,6 +344,8 @@ def build_parser():
     p = sub.add_parser("check", help="ตรวจอย่างเดียว ไม่รัน")
     p.add_argument("file", metavar="ไฟล์.th")
     p.add_argument("--stats", action="store_true", help="แสดงสถิติการคอมไพล์")
+    p.add_argument("--json", action="store_true",
+                   help="แสดงผลเป็น JSON สำหรับ editor หรือ CI")
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("fmt", help="จัดระเบียบการเยื้องและช่องว่าง")

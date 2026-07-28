@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-ตัวตัดคำภาษาไทย (Word Segmenter)
-================================
+ขั้นที่ 2 : ตัวตัดคำภาษาไทย (Word Segmenter)
+============================================
 
 ปัญหา
 -----
@@ -62,6 +62,25 @@ class Segmenter:
             self.words.add(name)
             self._cache.clear()
 
+    def cost_of(self, token, span):
+        """ต้นทุนของการมองข้อความช่วงนี้เป็นหนึ่งคำ — None = ไม่ยอมรับ
+
+        span = จำนวนกลุ่ม TCC ที่ครอบคลุม
+        """
+        if token in self.words:
+            return KNOWN_COST
+        if len(token) > MAX_UNKNOWN_CHARS:
+            return None
+        cost = UNKNOWN_BASE + UNKNOWN_PER_UNIT * span
+        if len(token) <= SHORT_UNKNOWN_CHARS:
+            cost += SHORT_UNKNOWN_PENALTY
+        return cost
+
+    def splits(self, text):
+        """คำนี้จะถูกซอยเป็นเศษไหมถ้ายืนอยู่ลำพัง (ยังไม่อยู่ในพจนานุกรม)"""
+        best = self.segment(text, 1)
+        return bool(best) and len(best[0][1]) > 1
+
     # ------------------------------------------------------------------
     def segment(self, text, k=6):
         """คืนผลการตัดคำ k แบบที่ต้นทุนต่ำสุด เรียงจากดีที่สุดไปหาแย่ที่สุด
@@ -76,7 +95,6 @@ class Segmenter:
     def _segment(self, text, k):
         marks = tcc.boundaries(text)
         index = {pos: i for i, pos in enumerate(marks)}
-        end = marks[-1]
 
         # paths[i] = k เส้นทางที่ดีที่สุดมาถึงตำแหน่ง marks[i]
         # แต่ละรายการ = (ต้นทุนสะสม, ตำแหน่งก่อนหน้า, ลำดับเส้นทางก่อนหน้า,
@@ -94,13 +112,8 @@ class Segmenter:
                     continue
                 token = text[start:stop]
                 known = token in self.words
-                if known:
-                    cost = KNOWN_COST
-                elif len(token) <= MAX_UNKNOWN_CHARS:
-                    cost = UNKNOWN_BASE + UNKNOWN_PER_UNIT * (j - i)
-                    if len(token) <= SHORT_UNKNOWN_CHARS:
-                        cost += SHORT_UNKNOWN_PENALTY
-                else:
+                cost = self.cost_of(token, j - i)
+                if cost is None:
                     continue
                 for rank, (acc, _, _, prev_unknown) in enumerate(paths[i]):
                     # ห้ามมีคำที่ไม่รู้จักสองก้อนติดกัน — ชื่อสองชื่อวางชิดกัน

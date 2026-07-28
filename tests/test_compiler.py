@@ -6,6 +6,7 @@
 """
 
 import io
+import json
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -14,10 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from thpro import compile_source, check_source                    # noqa: E402
-from thpro.pipeline import run                                    # noqa: E402
+from thpro.pipeline import run, new_segmenter                     # noqa: E402
 from thpro.errors import CompileError                             # noqa: E402
 from thpro.diagnostics import Code, DiagnosticBag, ERROR          # noqa: E402
+from thpro.compiler import sentence                               # noqa: E402
+from thpro.compiler.normalizer import normalize                   # noqa: E402
 from thpro.compiler.symbols import SymbolTable, FUNCTION          # noqa: E402
+from thpro.compiler.tokenizer import candidates, tokenize         # noqa: E402
+from thpro.compiler.wordseg import KNOWN_COST                     # noqa: E402
 from thpro.cli import _format                                     # noqa: E402
 
 
@@ -190,6 +195,95 @@ class TestSymbolTable(unittest.TestCase):
     def test_predefined_names(self):
         table = SymbolTable({"มีอยู่ก่อน"})
         self.assertIsNotNone(table.lookup("มีอยู่ก่อน"))
+
+
+# ====================================================== ผลลัพธ์ที่เครื่องอ่านได้
+class TestMachineReadableOutput(unittest.TestCase):
+    """editor และ CI ต้อง parse ผลการตรวจได้ ไม่ใช่อ่านข้อความสวย ๆ อย่างเดียว"""
+
+    def test_json_shape(self):
+        bag = check_source('ให้ชื่อเป็น "ก"\nแสดงชื่อลบ 1', "<test>")
+        data = json.loads(bag.to_json())
+        self.assertEqual(data["ok"], False)
+        self.assertEqual(data["errors"], 1)
+        self.assertEqual(data["file"], "<test>")
+        item = data["diagnostics"][0]
+        self.assertEqual(item["code"], Code.BAD_OPERAND)
+        self.assertEqual(item["severity"], "error")
+        self.assertEqual(item["line"], 2)
+        self.assertIsNotNone(item["column"])
+
+    def test_json_columns_are_one_based(self):
+        """ภายในเก็บคอลัมน์เริ่มที่ 0 แต่ที่ส่งออกต้องเริ่มที่ 1"""
+        bag = check_source('ให้ชื่อเป็น "ก"\nแสดงชื่อลบ 1', "<test>")
+        item = bag.sorted_items()[0]
+        self.assertEqual(item.to_dict()["column"], item.col + 1)
+
+    def test_json_is_valid_when_clean(self):
+        data = json.loads(check_source('แสดง "ก"', "<test>").to_json())
+        self.assertEqual(data["ok"], True)
+        self.assertEqual(data["diagnostics"], [])
+
+    def test_json_is_utf8_readable_thai(self):
+        """ต้องไม่ escape เป็น \\uXXXX มิฉะนั้นคนอ่าน log ไม่รู้เรื่อง"""
+        self.assertIn("ข้อความ",
+                      check_source('ให้ชื่อเป็น "ก"\nแสดงชื่อลบ 1',
+                                   "<test>").to_json())
+
+
+# ====================================================== ตัวตัดประโยค
+class TestSentenceModule(unittest.TestCase):
+    """ทดสอบ sentence.cut_points ตรง ๆ — ชั้นที่บอกว่า "ตัดตรงไหนได้บ้าง" """
+
+    @staticmethod
+    def _tokens(src):
+        lines = tokenize(src, "<test>")
+        return normalize(next(candidates(lines[0], new_segmenter())))
+
+    def test_separator_is_dropped(self):
+        toks = self._tokens("ให้aเป็น1 แล้ว แสดงa")
+        points = sentence.cut_points(toks)
+        self.assertTrue(any(drop == 1 for _i, drop in points),
+                        "ตัวคั่น 'แล้ว' ต้องถูกทิ้ง")
+
+    def test_command_starter_is_kept(self):
+        toks = self._tokens('แสดง"ก" แสดง"ข"')
+        points = sentence.cut_points(toks)
+        self.assertIn(0, [drop for _i, drop in points],
+                      "คำสั่ง 'แสดง' ต้องถูกเก็บไว้เป็นส่วนของประโยคถัดไป")
+
+    def test_no_boundary_in_a_plain_statement(self):
+        self.assertEqual(sentence.cut_points(self._tokens("ให้aเป็น1")), [])
+
+    def test_position_zero_is_never_a_boundary(self):
+        toks = self._tokens('แสดง"ก" แสดง"ข"')
+        self.assertTrue(all(i > 0 for i, _drop in sentence.cut_points(toks)))
+
+    def test_separator_ranks_before_starter(self):
+        toks = self._tokens('ให้aเป็น1 แล้ว แสดงa')
+        points = sentence.cut_points(toks)
+        if len(points) > 1:
+            self.assertEqual(points[0][1], 1, "ตัวคั่นชัดเจนต้องมาก่อน")
+
+
+# ====================================================== พจนานุกรมตัดคำ
+class TestSegmenterDictionary(unittest.TestCase):
+
+    def test_units_that_would_fragment_are_added(self):
+        """"คะแนน" ถูกซอยเป็น "คะ" + "แนน" จึงต้องถูกเติมเข้าพจนานุกรม"""
+        self.assertIn("คะแนน", new_segmenter().words)
+
+    def test_units_that_stand_alone_are_not_added(self):
+        """"ตัว" ยืนได้อยู่แล้ว ห้ามเติม มิฉะนั้น "ตัวแรก" จะถูกซอย"""
+        words = new_segmenter().words
+        for unit in ("ตัว", "คน", "บาท", "วัน"):
+            with self.subTest(unit=unit):
+                self.assertNotIn(unit, words)
+
+    def test_learned_name_beats_unit(self):
+        seg = new_segmenter()
+        seg.learn("คะแนน")
+        self.assertEqual(seg.cost_of("คะแนน", 3), KNOWN_COST)
 
 
 # ====================================================== ตัวจัดรูปแบบ

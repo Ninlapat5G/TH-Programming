@@ -188,6 +188,12 @@ PATTERNS = [
             [Kw("LET"), Slot("value", "expr"), Kw("STORE_IN"),
              Slot("target", "target")], _let),
 
+    # ประโยคบอกเล่า:  มีเงิน 100 บาท / มีเงินเป็น100 / เริ่มด้วยคะแนน0
+    # หน่วยท้ายเลข ("บาท") ถูกตัดทิ้งไปแล้วตั้งแต่ชั้น normalizer
+    Pattern("มีตัวแปรค่า",
+            [Kw("HAVE"), Opt("VAR"), Slot("target", "target"), Opt("BE"),
+             Slot("value", "expr")], _let),
+
     # ---------------------------------------------------------- ฟังก์ชัน
     Pattern("ฟังก์ชันมีพารามิเตอร์",
             [Kw("FUNC"), Opt("NAMED"), Slot("name", "name"), Kw("TAKES"),

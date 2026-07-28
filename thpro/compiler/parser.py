@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ขั้นที่ 3 : ตัวแยกวิเคราะห์ประโยค — หัวใจของการตีความภาษาไทย
+ขั้นที่ 5 : ตัวแยกวิเคราะห์ประโยค — หัวใจของการตีความภาษาไทย
 
 แนวคิดหลัก: **ให้ไวยากรณ์เป็นคนตัดสินการตัดคำ**
 -----------------------------------------------
@@ -16,18 +16,25 @@
 บรรทัดถัดไปที่ใช้ชื่อนี้จึงตัดถูกตั้งแต่ครั้งแรก
 
 ลำดับการพยายาม
-    1. ตัวเลือกการตัดคำทั้งหมด (เรียงตามต้นทุน)
-    2. ตัดคำเสริมแบบเข้มข้น
-    3. เดาคำที่พิมพ์ผิด
+    1. ตัวเลือกการตัดคำทั้งหมด (เรียงตามต้นทุน)      -> หนึ่งบรรทัด = หนึ่งคำสั่ง
+    2. ตัดประโยค                                    -> หนึ่งบรรทัด = หลายคำสั่ง
+    3. ตัดคำเสริมแบบเข้มข้น
+    4. เดาคำที่พิมพ์ผิด
+
+ข้อ 2 อยู่ *หลัง* ข้อ 1 เสมอ — ถ้าทั้งบรรทัดแปลเป็นคำสั่งเดียวได้ จะใช้แบบนั้น
+โปรแกรมที่เคยคอมไพล์ผ่านจึงไม่มีทางเปลี่ยนความหมายเพราะฟีเจอร์ตัดประโยค
 """
+
+from dataclasses import dataclass, field
+from typing import List
 
 from ..diagnostics import Code, DiagnosticBag
 from ..errors import ParseError
 from ..lang import lexicon
 from ..lang.builtins import CAST_TYPES
-from ..lang.grammar import PATTERNS, INLINE_PATTERNS, Kw, Opt, Slot
+from ..lang.grammar import PATTERNS, INLINE_PATTERNS, Kw, Opt, Pattern, Slot
 from . import ast_nodes as A
-from . import normalizer, tokenizer
+from . import normalizer, sentence, tokenizer
 from .expressions import try_parse_expression, RESERVED_IN_EXPR
 from .wordseg import Segmenter
 
@@ -48,12 +55,35 @@ def _keyword_count(pattern):
     return _KEYWORDS.get(id(pattern), 0)
 
 
+@dataclass
+class Match:
+    """รูปประโยคหนึ่งอันที่จับคู่สำเร็จ พร้อมค่าที่เติมลงช่องต่าง ๆ"""
+    pattern: Pattern
+    slots: dict
+
+
+@dataclass
+class Reading:
+    """การตีความบรรทัดหนึ่งบรรทัด — หนึ่งคำสั่ง หรือหลายคำสั่งที่ตัดประโยคแล้ว"""
+    matches: List[Match] = field(default_factory=list)
+    note: str = None
+
+    @property
+    def opens_block(self):
+        """มีเฉพาะกรณีคำสั่งเดียวเท่านั้นที่เปิดบล็อกย่อยได้"""
+        return len(self.matches) == 1 and self.matches[0].pattern.block
+
+
 class Parser:
     # ตำแหน่งที่ต้องตามด้วย "ชื่อ" เสมอ — ใช้ตรวจว่าตั้งชื่อชนคำสงวนหรือไม่
-    _NAME_SLOTS = {"FUNC", "CALL", "COUNT", "FOREACH", "STORE_IN", "TAKES"}
+    _NAME_SLOTS = {"FUNC", "CALL", "COUNT", "FOREACH", "STORE_IN", "TAKES",
+                   "HAVE"}
 
     # เมื่อเจอการตีความที่ใช้ได้แล้ว ยังมองต่ออีกกี่ตัวเลือกเพื่อหาที่ดีกว่า
     LOOKAHEAD = 12
+
+    # จำนวนลำดับโทเคนที่เก็บไว้ให้ขั้นตัดประโยคลองต่อ ถ้าแปลทั้งบรรทัดไม่ได้
+    SPLIT_CANDIDATES = 6
 
     # จำนวนข้อผิดพลาดไวยากรณ์สูงสุดที่จะรายงาน ก่อนจะยอมแพ้
     MAX_ERRORS = 20
@@ -91,8 +121,8 @@ class Parser:
                         "บล็อกย่อยเกิดหลังคำสั่ง ถ้า / ทำซ้ำ / ตราบใดที่ / "
                         "ฟังก์ชัน เท่านั้น",
                         col=0, length=line.indent, code=Code.BAD_INDENT)
-                node, role = self.parse_statement(indent)
-                self._attach(body, node, role, line)
+                for node, role in self.parse_statement(indent):
+                    self._attach(body, node, role, line)
             except ParseError as err:
                 self._recover(err, start)
         return body
@@ -135,32 +165,41 @@ class Parser:
 
     # ================================================== ระดับประโยค
     def parse_statement(self, indent):
-        line = self.lines[self.pos]
-        pattern, slots, note = self.resolve(line)
+        """อ่านหนึ่งบรรทัด — คืน list ของ (โหนด, บทบาท)
 
-        if pattern is None:
+        ปกติได้หนึ่งรายการ แต่บรรทัดที่ถูก "ตัดประโยค" จะได้หลายรายการ
+        """
+        line = self.lines[self.pos]
+        reading = self.resolve(line)
+
+        if reading is None:
             first = line.tokens[0] if line.tokens else None
             raise ParseError(
                 "ไม่เข้าใจคำสั่งนี้", line.lineno, line.raw, self._hint(line),
                 col=first.col if first else line.indent,
                 length=len(first.text) if first else 1,
                 code=self._error_code(line))
-        if note:
-            self.bag.warning(Code.TYPO_GUESS, note, phase="syntax",
+        if reading.note:
+            self.bag.warning(Code.TYPO_GUESS, reading.note, phase="syntax",
                              line=line.lineno)
+        self._check_swallowed_keyword(line)
 
         # ต้องจำชื่อ *ก่อน* อ่านบล็อกย่อย มิฉะนั้นตัวแปรลูปและพารามิเตอร์
         # จะยังไม่อยู่ในพจนานุกรมตอนตัดคำบรรทัดข้างใน
-        self._learn(slots)
+        for match in reading.matches:
+            self._learn(match.slots)
 
         self.pos += 1
         body = []
-        if pattern.block:
+        if reading.opens_block:
             body = self._child_block(line, indent)
 
-        node = pattern.build(slots, line.lineno, body)
-        node.line = line.lineno
-        return node, pattern.role
+        out = []
+        for match in reading.matches:
+            node = match.pattern.build(match.slots, line.lineno, body)
+            node.line = line.lineno
+            out.append((node, match.pattern.role))
+        return out
 
     def _child_block(self, line, indent):
         if self.pos >= len(self.lines) or self.lines[self.pos].indent <= indent:
@@ -169,6 +208,50 @@ class Parser:
                              "(แนะนำ 4 ช่องว่าง) หรือเขียนจบในบรรทัดเดียว",
                              col=line.indent, code=Code.EMPTY_BLOCK)
         return self.parse_block(self.lines[self.pos].indent)
+
+    # ============================================ คำสงวนถูกกลืนเข้าไปในชื่อ
+    def _check_swallowed_keyword(self, line):
+        """จับกรณีที่ชื่อตัวแปร "กลืน" คำสั่งที่ขึ้นต้นบรรทัดเข้าไป
+
+        ปัญหา
+            ให้บวกเป็น 3
+
+        ผู้ใช้ตั้งใจตั้งชื่อตัวแปรว่า "บวก" ซึ่งเป็นตัวดำเนินการ ทำไม่ได้
+        การตีความที่ถูกต้องจึงพังทั้งหมด แล้วตัวตัดคำไปเสนอ "ให้บวก"
+        เป็นชื่อเดียวแทน — ซึ่ง *แปลผ่าน* เป็น ให้บวก = 3
+
+        ผลคือคอมไพเลอร์เงียบ แล้วสร้างตัวแปรที่ผู้ใช้ไม่ได้ตั้งใจ
+        อันตรายกว่าการฟ้อง เพราะผู้ใช้ไม่มีทางรู้เลยว่าเกิดอะไรขึ้น
+
+        เงื่อนไขที่ฟ้อง (แคบมากโดยตั้งใจ เพื่อไม่ให้ฟ้องผิด)
+            1. โทเคนแรกของบรรทัดเป็นชื่อที่ผู้ใช้ตั้ง (ไม่มี id)
+            2. ชื่อนั้นขึ้นต้นด้วยคำที่ใช้ขึ้นต้นคำสั่งได้
+            3. ส่วนที่เหลือหลังตัดคำนั้นออก เป็น "คำสงวนแข็ง" พอดีเป๊ะ
+
+        ข้อ 3 คือสิ่งที่กันการฟ้องผิด — ชื่ออย่าง "นับถอยหลัง" เหลือ "ถอยหลัง"
+        ซึ่งไม่ใช่คำสงวน จึงไม่ถูกแตะ
+        """
+        if not line.tokens:
+            return
+        head = line.tokens[0]
+        if head.kind != "WORD" or head.ids:
+            return
+
+        for starter in lexicon.COMMAND_STARTERS:
+            if not head.text.startswith(starter) or len(head.text) == len(starter):
+                continue
+            rest = head.text[len(starter):]
+            if not (lexicon.ids_of(rest) & RESERVED_IN_EXPR):
+                continue
+            self.bag.error(
+                Code.RESERVED_AS_NAME,
+                f'"{rest}" เป็นคำสงวนของภาษา จึงตั้งเป็นชื่อไม่ได้',
+                phase="syntax", line=line.lineno, col=head.col,
+                length=len(head.text),
+                hint=f'คอมไพเลอร์เลยอ่าน "{head.text}" รวมเป็นชื่อเดียว '
+                     f'ซึ่งน่าจะไม่ใช่สิ่งที่ตั้งใจ — ลองเปลี่ยนเป็น '
+                     f'"{rest}เลข" หรือ "ค่า{rest}"')
+            return
 
     @staticmethod
     def _error_code(line):
@@ -179,7 +262,7 @@ class Parser:
 
     # ================================================== เลือกการตัดคำที่แปลได้
     def resolve(self, line):
-        """ลองตัดคำหลายแบบ แล้วเลือก "การตีความที่ดีที่สุด"
+        """ลองตัดคำหลายแบบ แล้วเลือก "การตีความที่ดีที่สุด" — คืน Reading
 
         เกณฑ์การเลือก (น้อยกว่า = ดีกว่า)
             1. รูปประโยคที่ต้องใช้คีย์เวิร์ดมากกว่า  (ตีความได้ละเอียดกว่า)
@@ -192,6 +275,7 @@ class Parser:
         """
         first, best = None, None
         seen_at = None
+        tried = []
 
         for index, tokens in enumerate(tokenizer.candidates(line, self.seg)):
             if first is None:
@@ -200,6 +284,8 @@ class Parser:
                 break
 
             line.tokens = normalizer.normalize(tokens)
+            if len(tried) < self.SPLIT_CANDIDATES:
+                tried.append(line.tokens)
             pattern, slots = self.match(line)
             if pattern is None:
                 continue
@@ -212,33 +298,128 @@ class Parser:
 
         if best is not None:
             line.tokens = best[3]
-            return best[1], best[2], None
+            return Reading([Match(best[1], best[2])])
 
         if first is None:
-            return None, None, None
+            return None
 
-        # ทางเลือกสำรอง 1: ตัดคำเสริมแบบเข้มข้น
+        # ทางเลือกสำรอง 1: ตัดประโยค — หนึ่งบรรทัดอาจมีหลายคำสั่ง
+        reading = self._resolve_split(line, tried)
+        if reading is not None:
+            return reading
+
+        # ทางเลือกสำรอง 2: ตัดคำเสริมแบบเข้มข้น
         line.tokens = normalizer.normalize(first, aggressive=True)
         pattern, slots = self.match(line)
         if pattern is not None:
-            return pattern, slots, None
+            return Reading([Match(pattern, slots)])
 
-        # ทางเลือกสำรอง 2: เดาคำที่พิมพ์ผิด
+        # ทางเลือกสำรอง 3: เดาคำที่พิมพ์ผิด
         line.tokens = normalizer.normalize(first)
         fixed, note = normalizer.repair(line.tokens)
         if fixed is not None:
             saved, line.tokens = line.tokens, fixed
             pattern, slots = self.match(line)
             if pattern is not None:
-                return pattern, slots, note
+                return Reading([Match(pattern, slots)], note)
             line.tokens = saved
 
-        return None, None, None
+        return None
 
-    def match(self, line, patterns=PATTERNS):
+    # -------------------------------------------------- ตัดประโยค
+    def _resolve_split(self, line, token_lists):
+        """ลองมองบรรทัดนี้เป็น "หลายคำสั่งเรียงกัน"
+
+        ทุกท่อนต้องแปลเป็นคำสั่งได้ครบถ้วน ถ้ามีท่อนใดแปลไม่ได้ถือว่าการตัด
+        แบบนั้นผิด แล้วไปลองแบบถัดไป — เกณฑ์เดียวกับที่ใช้ตัดสินการตัดคำ
+
+        ทำสองรอบ เพราะประโยคแรกของบรรทัดมักเป็นตัวประกาศชื่อที่ประโยคหลัง
+        จะใช้ต่อ
+
+            มีรายการโปรดเป็น[] แล้ว เพิ่ม"ลาเต้"เข้าไปในรายการโปรด
+
+        รอบแรกยังไม่รู้จัก "รายการโปรด" จึงตัดท่อนหลังผิดเป็น ในรายการ|โปรด
+        แต่ระหว่างค้นได้เรียนรู้ชื่อจากท่อนแรกไปแล้ว รอบสองจึงตัดถูก
+        (หลักการเดียวกับการเรียนรู้ข้ามบรรทัด เพียงแต่ทำภายในบรรทัดเดียว)
+        """
+        known = len(self.seg.words)
+        reading = self._try_split(line, token_lists)
+        if reading is not None or len(self.seg.words) == known:
+            return reading
+        return self._try_split(line, self._candidates(line))
+
+    def _try_split(self, line, token_lists):
+        for rank, tokens in enumerate(token_lists):
+            # ยอมให้ "เดา" ชื่อจากประโยคแรกเฉพาะการตัดคำที่ถูกที่สุดเท่านั้น
+            # การตัดคำที่แพงกว่าเป็นเพียงข้อสันนิษฐาน ถ้าปล่อยให้จำชื่อด้วย
+            # พจนานุกรมจะเปื้อนชื่อผิด ๆ แล้วทำให้รอบถัดไปตัดเพี้ยนหนักกว่าเดิม
+            matches = self._split_search(tokens, line, learn=(rank == 0))
+            if matches is not None and len(matches) > 1:
+                line.tokens = tokens
+                return Reading(matches)
+        return None
+
+    def _candidates(self, line):
+        """ลำดับโทเคนที่เป็นไปได้ของบรรทัดนี้ เท่าที่ขั้นตัดประโยคจะลองไหว"""
+        out = []
+        for tokens in tokenizer.candidates(line, self.seg):
+            out.append(normalizer.normalize(tokens))
+            if len(out) >= self.SPLIT_CANDIDATES:
+                break
+        return out
+
+    def _split_search(self, tokens, line, learn=False):
+        """หาการตัดประโยคที่ทุกท่อนแปลได้ ด้วยการค้นแบบจำผลลัพธ์ (memoized)
+
+        solve(i) = "ตั้งแต่โทเคนที่ i ถึงจบ ตัดเป็นคำสั่งครบได้ไหม"
+        ลองเอาทั้งช่วงที่เหลือเป็นคำสั่งเดียวก่อนเสมอ จึงได้จำนวนรอยตัดน้อยที่สุด
+        โดยธรรมชาติ แล้วค่อยไล่จุดตัดตามอันดับที่ sentence เสนอมา
+
+        จำผลของแต่ละจุดเริ่ม ทำให้ทำงานเป็น O(จุดตัด^2) ไม่ระเบิดแบบลองทุกชุด
+        """
+        points = sentence.cut_points(tokens)
+        if not points:
+            return None
+
+        memo = {}
+
+        def solve(start):
+            if start in memo:
+                return memo[start]
+            memo[start] = None                  # กันการวนซ้ำระหว่างค้น
+            whole = self._match_part(tokens[start:], line)
+            if whole is not None:
+                memo[start] = [whole]
+                return memo[start]
+            for index, drop in points:
+                if index <= start:
+                    continue
+                head = self._match_part(tokens[start:index], line)
+                if head is None:
+                    continue
+                # จำชื่อที่ประโยคแรกประกาศ เพื่อให้ตัดคำประโยคถัดไปถูก
+                if learn and start == 0:
+                    self._learn(head.slots)
+                rest = solve(index + drop)
+                if rest is not None:
+                    memo[start] = [head] + rest
+                    return memo[start]
+            return None
+
+        return solve(0)
+
+    def _match_part(self, part, line):
+        """จับคู่โทเคนหนึ่งท่อนกับรูปประโยคแบบบรรทัดเดียว — None ถ้าไม่เข้ารูปไหน"""
+        if not part:
+            return None
+        pattern, slots = self.match(line, INLINE_PATTERNS, tokens=part)
+        return None if pattern is None else Match(pattern, slots)
+
+    def match(self, line, patterns=PATTERNS, tokens=None):
+        toks = line.tokens if tokens is None else tokens
         self._cache = {}
         for pattern in patterns:
-            slots = self._match(pattern.elems, 0, line.tokens, 0, {}, line)
+            slots = self._match(pattern.elems, 0, toks, 0, {}, line)
             if slots is not None:
                 return pattern, slots
         return None, None
@@ -358,10 +539,9 @@ class Parser:
         """แปลชุดโทเคนย่อยให้เป็นคำสั่งหนึ่งคำสั่ง (ใช้กับรูปแบบบรรทัดเดียว)"""
         if not sub:
             return None
-        saved_tokens, saved_cache = line.tokens, self._cache
+        saved_cache = self._cache
         try:
-            line.tokens = sub
-            pattern, slots = self.match(line, INLINE_PATTERNS)
+            pattern, slots = self.match(line, INLINE_PATTERNS, tokens=sub)
             if pattern is None:
                 return None
             self._learn(slots)
@@ -369,7 +549,7 @@ class Parser:
             node.line = line.lineno
             return node
         finally:
-            line.tokens, self._cache = saved_tokens, saved_cache
+            self._cache = saved_cache
 
     # ================================================== พจนานุกรมที่เรียนรู้ได้
     _NAME_KEYS = ("var", "name", "target")

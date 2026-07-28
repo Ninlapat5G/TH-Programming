@@ -70,6 +70,11 @@ class Code:
     DUPLICATE_FUNCTION = "TH306"
     ASSIGN_TO_FUNCTION = "TH307"
 
+    # --- ชนิดข้อมูล ---
+    BAD_OPERAND = "TH311"
+    NOT_INDEXABLE = "TH312"
+    BAD_ARGUMENT_TYPE = "TH313"
+
     # --- runtime ---
     RUNTIME = "TH401"
 
@@ -117,6 +122,24 @@ class Diagnostic:
         if self.hint:
             out.append(f"     ↳ คำแนะนำ: {self.hint}")
         return "\n".join(out)
+
+    def to_dict(self):
+        """รูปแบบที่เครื่องอ่านได้ — ใช้กับ editor, CI และเครื่องมือภายนอก
+
+        คอลัมน์ในนี้เริ่มที่ 1 ตามธรรมเนียมของเครื่องมือทั่วไป
+        (ภายในคอมไพเลอร์เก็บแบบเริ่มที่ 0)
+        """
+        return {
+            "code": self.code,
+            "severity": self.severity,
+            "phase": self.phase,
+            "message": self.message,
+            "hint": self.hint,
+            "line": self.line,
+            "column": None if self.col is None else self.col + 1,
+            "length": self.length or None,
+            "source": self.source,
+        }
 
     def __str__(self):
         return self.render()
@@ -187,6 +210,20 @@ class DiagnosticBag:
         chosen = [d for d in self.sorted_items()
                   if only is None or d.severity == only]
         return "\n\n".join(d.render(color) for d in chosen)
+
+    def to_dict(self, ok=None):
+        """สรุปผลการคอมไพล์ทั้งไฟล์ในรูปที่เครื่องอ่านได้"""
+        return {
+            "file": self.name,
+            "ok": (not self.has_errors()) if ok is None else ok,
+            "errors": len(self.errors),
+            "warnings": len(self.warnings),
+            "diagnostics": [d.to_dict() for d in self.sorted_items()],
+        }
+
+    def to_json(self, ok=None, indent=2):
+        import json
+        return json.dumps(self.to_dict(ok), ensure_ascii=False, indent=indent)
 
     def summary(self):
         errors, warnings = len(self.errors), len(self.warnings)

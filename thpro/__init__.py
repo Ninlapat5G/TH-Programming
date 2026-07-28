@@ -12,7 +12,7 @@ from .pipeline import (compile_source, check_source, run_source, run,
 from .errors import ThaiError, CompileError
 from .diagnostics import DiagnosticBag, Diagnostic
 
-__version__ = "1.0.0"
+__version__ = "1.3.0"
 __all__ = [
     "compile_source", "check_source", "run_source", "run", "new_segmenter",
     "Program", "ThaiError", "CompileError", "DiagnosticBag", "Diagnostic",

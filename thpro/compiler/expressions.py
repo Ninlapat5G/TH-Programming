@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ขั้นที่ 4 : ตัวแยกวิเคราะห์นิพจน์ (Pratt parser)
+ขั้นที่ 5ข : ตัวแยกวิเคราะห์นิพจน์ (Pratt parser) — ถูกเรียกจาก parser.py
 
 รองรับตัวดำเนินการทั้งแบบคำไทยและสัญลักษณ์ปนกันได้ เช่น
     ราคา คูณ 2 บวก ภาษี
@@ -179,14 +179,15 @@ class ExprParser:
 # คำสั่งที่ใช้ขึ้นต้นประโยค — ห้ามถูกตีความเป็นชื่อตัวแปรกลางนิพจน์
 # มิฉะนั้น "ฟังก์ชันบวกเลข..." จะถูกอ่านเป็น  ฟังก์ชัน + เลข...  ซึ่งไร้ความหมาย
 COMMAND_IDS = {
-    "PRINT", "LET", "ASK", "INC", "DEC", "IF", "ELIF", "ELSE", "REPEAT",
-    "FOREACH", "WHILE", "UNTIL", "COUNT", "BREAK", "CONTINUE", "FUNC",
-    "RETURN", "CALL",
+    "PRINT", "LET", "HAVE", "ASK", "INC", "DEC", "IF", "ELIF", "ELSE",
+    "REPEAT", "FOREACH", "WHILE", "UNTIL", "COUNT", "BREAK", "CONTINUE",
+    "FUNC", "RETURN", "CALL",
 }
 
 # id ที่ห้ามปรากฏในตำแหน่ง "ค่า"
 # หมายเหตุ: คำเชื่อมอ่อน ๆ อย่าง ครั้ง/ใน/ถึง/ด้วย ไม่อยู่ในชุดนี้
 # เพราะคนไทยนิยมเอาไปตั้งเป็นชื่อตัวแปร เช่น "รอบ"
+# "แล้ว" (SEQ) ก็ไม่อยู่ในชุดนี้ เพราะทำหน้าที่ THEN ในรูปประโยคเงื่อนไขด้วย
 RESERVED_IN_EXPR = set(BINARY_PREC) | COMMAND_IDS | {
     "NOT", "COMMA", "COLON", "ASSIGN_OP", "RPAREN", "RBRACK", "RBRACE",
 }
