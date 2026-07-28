@@ -14,16 +14,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from thpro import compile_source, check_source                    # noqa: E402
-from thpro.pipeline import run, new_segmenter                     # noqa: E402
-from thpro.errors import CompileError                             # noqa: E402
-from thpro.diagnostics import Code, DiagnosticBag, ERROR          # noqa: E402
-from thpro.compiler import sentence                               # noqa: E402
-from thpro.compiler.normalizer import normalize                   # noqa: E402
-from thpro.compiler.symbols import SymbolTable, FUNCTION          # noqa: E402
-from thpro.compiler.tokenizer import candidates, tokenize         # noqa: E402
-from thpro.compiler.wordseg import KNOWN_COST                     # noqa: E402
-from thpro.cli import _format                                     # noqa: E402
+from thprog import compile_source, check_source                    # noqa: E402
+from thprog.pipeline import run, new_segmenter                     # noqa: E402
+from thprog.errors import CompileError                             # noqa: E402
+from thprog.diagnostics import Code, DiagnosticBag, ERROR          # noqa: E402
+from thprog.compiler import sentence                               # noqa: E402
+from thprog.compiler.normalizer import normalize                   # noqa: E402
+from thprog.compiler.symbols import SymbolTable, FUNCTION          # noqa: E402
+from thprog.compiler.tokenizer import candidates, tokenize         # noqa: E402
+from thprog.compiler.wordseg import KNOWN_COST                     # noqa: E402
+from thprog.cli import _format, main as cli_main                   # noqa: E402
 
 
 def codes(src):
@@ -302,6 +302,99 @@ class TestFormatter(unittest.TestCase):
     def test_dedent_back_to_outer_level(self):
         messy = "ถ้าจริง\n   แสดง1\nแสดง2\n"
         self.assertEqual(_format(messy), "ถ้าจริง\n    แสดง1\nแสดง2\n")
+
+
+# ====================================================== รับซอร์สจากหลายทาง
+class TestCommandLineSource(unittest.TestCase):
+    """thprog -c "โค้ด"  และการรับโค้ดทาง stdin — เทียบเท่า python -c"""
+
+    def _run(self, argv, stdin=None):
+        buf, saved_in, saved_out = io.StringIO(), sys.stdin, sys.stdout
+        if stdin is not None:
+            sys.stdin = io.StringIO(stdin)
+        try:
+            with redirect_stdout(buf):
+                status = cli_main(argv)
+        finally:
+            sys.stdin, sys.stdout = saved_in, saved_out
+        return status, buf.getvalue()
+
+    def test_dash_c_runs_code(self):
+        status, output = self._run(["-c", 'แสดง "สวัสดี"'])
+        self.assertEqual(status, 0)
+        self.assertEqual(output, "สวัสดี\n")
+
+    def test_dash_c_multiline(self):
+        status, output = self._run(["-c", "ให้ ก เป็น 2\nทำซ้ำ ก ครั้ง\n    แสดง 1"])
+        self.assertEqual(status, 0)
+        self.assertEqual(output, "1\n1\n")
+
+    def test_dash_c_after_subcommand(self):
+        status, output = self._run(["show", "-c", "แสดง 1"])
+        self.assertEqual(status, 0)
+        self.assertIn("print(1)", output)
+
+    def test_stdin_source(self):
+        status, output = self._run(["-"], stdin='แสดง "จาก stdin"\n')
+        self.assertEqual(status, 0)
+        self.assertEqual(output, "จาก stdin\n")
+
+    def test_check_dash_c_json(self):
+        status, output = self._run(["check", "-c", "แสดงกขค", "--json"])
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(output)["errors"], 1)
+
+    def test_compile_error_reports_exit_code(self):
+        status, _ = self._run(["-c", "ไม่ใช่คำสั่งอะไรเลย"])
+        self.assertEqual(status, 1)
+
+    # ---------------------------------------------- เขียนสั้นกว่าเดิม
+    def test_bare_argument_is_treated_as_code(self):
+        """ไม่ต้องพิมพ์ -c — อาร์กิวเมนต์แรกที่ไม่ใช่ไฟล์ถือเป็นโค้ด"""
+        status, output = self._run(['แสดง "สวัสดี"'])
+        self.assertEqual((status, output), (0, "สวัสดี\n"))
+
+    def test_bare_expression_prints_its_value(self):
+        """โหมดพิมพ์สดแสดงค่าให้เลย ไม่ต้องสั่ง แสดง"""
+        self.assertEqual(self._run(["2 บวก 3"])[1], "5\n")
+        self.assertEqual(self._run(["-c", "รากที่สอง(144)"])[1], "12.0\n")
+
+    def test_void_call_prints_nothing(self):
+        """คำสั่งที่ไม่คืนค่าต้องไม่พ่นคำว่า None ออกมา"""
+        status, output = self._run(
+            ["-c", 'สร้างคำสั่งขีดเส้น\n    แสดง "-"\nเรียกขีดเส้น'])
+        self.assertEqual((status, output), (0, "-\n"))
+
+    def test_file_mode_does_not_auto_print(self):
+        """ไฟล์ .th ต้องทำงานเหมือนเดิมทุกประการ ไม่มีการแสดงค่าอัตโนมัติ"""
+        self.assertNotIn("_th_show", py("ให้ราคาเป็น 5\nราคาบวก 1"))
+
+    def test_existing_file_still_wins_over_code(self):
+        example = (Path(__file__).resolve().parent.parent
+                   / "examples" / "01_hello.th")
+        status, output = self._run([str(example)])
+        self.assertEqual(status, 0)
+        self.assertIn("สวัสดีชาวโลก!", output)
+
+    def test_missing_th_file_still_reports_not_found(self):
+        status, _ = self._run(["ไม่มีไฟล์นี้จริง.th"])
+        self.assertEqual(status, 1)
+
+    def test_thai_subcommands(self):
+        for thai, english in (("ดูโค้ด", "show"), ("ตรวจ", "check")):
+            with self.subTest(cmd=thai):
+                thai_out = self._run([thai, "-c", "แสดง 1"])
+                english_out = self._run([english, "-c", "แสดง 1"])
+                self.assertEqual(thai_out, english_out)
+
+    def test_make_library_skeleton(self):
+        status, output = self._run(["สร้างคลัง", "str"])
+        self.assertEqual(status, 0)
+        self.assertIn("นำเข้าวิธี strip เป็น______", output)
+
+    def test_make_library_unknown_module(self):
+        status, _ = self._run(["สร้างคลัง", "ไม่มีโมดูลนี้_zz"])
+        self.assertEqual(status, 1)
 
 
 if __name__ == "__main__":

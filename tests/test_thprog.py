@@ -6,6 +6,7 @@
 """
 
 import io
+import re
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -13,11 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from thpro import compile_source, check_source                    # noqa: E402
-from thpro.pipeline import run                                    # noqa: E402
-from thpro.errors import CompileError, RuntimeThaiError           # noqa: E402
-from thpro.diagnostics import Code                                # noqa: E402
-from thpro.compiler import tcc                                    # noqa: E402
+from thprog import compile_source, check_source                    # noqa: E402
+from thprog.pipeline import run                                    # noqa: E402
+from thprog.errors import CompileError, RuntimeThaiError           # noqa: E402
+from thprog.diagnostics import Code                                # noqa: E402
+from thprog.compiler import tcc                                    # noqa: E402
 
 
 def codes(src):
@@ -760,7 +761,7 @@ class TestTypeChecker(unittest.TestCase):
 
         ต้องตรวจได้เข้มเท่ากับตอนคอมไพล์ทั้งไฟล์ ไม่ใช่ปล่อยไปพังตอนรัน
         """
-        from thpro.compiler.typecheck import type_of_value
+        from thprog.compiler.typecheck import type_of_value
 
         self.assertEqual(type_of_value("ก"), "ข้อความ")
         self.assertEqual(type_of_value(5), "จำนวนเต็ม")
@@ -815,6 +816,200 @@ class TestRuntimeErrors(unittest.TestCase):
 
 
 # ====================================================== ตัวอย่างทั้งหมด
+class TestImport(unittest.TestCase):
+    """นำเข้าไลบรารีของ Python — ทางลัดสู่ระบบนิเวศทั้งหมด"""
+
+    def test_import_module(self):
+        self.assertIn("import math", py("นำเข้า math\nแสดง math.pi"))
+
+    def test_import_synonyms(self):
+        for word in ("นำเข้า", "ใช้", "ใช้ไลบรารี", "ใช้โมดูล", "ขอใช้",
+                     "เรียกใช้ไลบรารี", "โหลดไลบรารี", "import"):
+            with self.subTest(word=word):
+                self.assertIn("import math",
+                              py(f"{word} math\nแสดง math.pi"))
+
+    def test_import_as_thai_name(self):
+        code = py("นำเข้า math เป็นคณิต\nแสดง คณิต.pi")
+        self.assertIn("import math as คณิต", code)
+        self.assertIn("print(คณิต.pi)", code)
+
+    def test_from_import(self):
+        self.assertIn("from math import sqrt",
+                      py("นำเข้า sqrt จาก math\nแสดง sqrt(4)"))
+
+    def test_from_import_several(self):
+        self.assertIn("from math import sqrt, pi",
+                      py("นำเข้า sqrt, pi จาก math\nแสดง sqrt(4), pi"))
+
+    def test_from_import_as_thai_name(self):
+        """การห่อฟังก์ชัน Python ให้เป็นคำไทย — หัวใจของการลดคอขวดไลบรารี"""
+        code = py("นำเข้า factorial จาก math เป็นแฟกทอเรียล\nแสดง แฟกทอเรียล(5)")
+        self.assertIn("from math import factorial as แฟกทอเรียล", code)
+        self.assertEqual(out("นำเข้า factorial จาก math เป็นแฟกทอเรียล\n"
+                             "แสดงแฟกทอเรียล(5)"), "120\n")
+
+    def test_identifiers_with_digits(self):
+        """ชื่อของฝั่ง Python มีตัวเลขปนได้ทุกตำแหน่ง — log10 · COLOR_BGR2GRAY"""
+        for name in ("log10", "log2", "sha256", "utf8", "COLOR_BGR2GRAY", "x2y3"):
+            with self.subTest(name=name):
+                code = py(f"นำเข้า {name} จาก zzmod เป็นของไทย\nแสดงของไทย")
+                self.assertIn(f"from zzmod import {name} as ของไทย", code)
+
+    def test_thai_name_followed_by_number_still_splits(self):
+        """"คะแนน80" ต้องแยกเป็นชื่อกับตัวเลขเหมือนเดิม"""
+        self.assertIn("คะแนน = 80", py("ให้คะแนนเป็น80\nแสดงคะแนน"))
+
+    def test_dotted_module(self):
+        self.assertIn("import os.path",
+                      py('ใช้ os.path\nแสดง os.path.basename("ก/ข.txt")'))
+
+    def test_runs_end_to_end(self):
+        self.assertEqual(out("นำเข้า math\nแสดงmath.sqrt(16)"), "4.0\n")
+
+    def test_method_call_on_value(self):
+        self.assertEqual(out('ให้ชื่อเป็น "abc"\nแสดงชื่อ.upper()'), "ABC\n")
+
+    def test_attribute_in_condition(self):
+        source = ("นำเข้า date จาก datetime\n"
+                  "ให้วันนี้เป็น date(2026, 7, 29)\n"
+                  "ถ้าวันนี้.month มากกว่า 6\n"
+                  '    แสดง "ครึ่งปีหลัง"')
+        self.assertEqual(out(source), "ครึ่งปีหลัง\n")
+
+    def test_unknown_module_is_warning_not_error(self):
+        """เตือนอย่างเดียว — เครื่องที่รันจริงอาจติดตั้งไลบรารีนั้นไว้"""
+        found = codes("นำเข้า zzz_no_such_module_xyz\nแสดง 1")
+        self.assertIn(Code.MODULE_NOT_FOUND, found)
+        self.assertNotIn(Code.UNKNOWN_STATEMENT, found)
+        # ต้องคอมไพล์ผ่าน ไม่ใช่ล้มเหลว
+        compile_source("นำเข้า zzz_no_such_module_xyz\n"
+                       "แสดง zzz_no_such_module_xyz.a", "<test>")
+
+    def test_unused_import_warns(self):
+        self.assertIn(Code.UNUSED_VARIABLE, codes("นำเข้า math\nแสดง 1"))
+
+    def test_module_name_must_be_ascii(self):
+        """ชื่อโมดูลภาษาไทยไม่รับ เพราะจะโดนตัดคำแล้วฟ้องมั่ว"""
+        self.assertIn(Code.UNKNOWN_STATEMENT, codes("นำเข้า ไลบรารีไทย"))
+
+    def test_import_does_not_break_names_containing_the_keyword(self):
+        for name in ("ชื่อผู้ใช้", "ค่าใช้จ่าย", "การใช้งาน", "ยอดนำเข้า",
+                     "จำนวนผู้ใช้", "สินค้านำเข้า"):
+            with self.subTest(name=name):
+                self.assertIn(f"{name} = 5", py(f"ให้{name}เป็น 5\nแสดง{name}"))
+
+
+class TestMethodBinding(unittest.TestCase):
+    """ผูกเมธอด Python เป็นกริยาไทย (UFCS) — พลิกลำดับคำให้ตรงไวยากรณ์ไทย"""
+
+    def test_generates_free_function(self):
+        code = py("นำเข้าวิธี strip เป็นตัดขอบ")
+        self.assertIn("def ตัดขอบ(ตัวมัน, *ค่า, **ค่าที่ตั้งชื่อ):", code)
+        self.assertIn("return ตัวมัน.strip(*ค่า, **ค่าที่ตั้งชื่อ)", code)
+
+    def test_verb_object_order(self):
+        source = ('นำเข้าวิธี strip เป็นตัดขอบ\n'
+                  'ให้ประโยคเป็น "  ก  "\n'
+                  'แสดงตัดขอบของประโยค')
+        self.assertEqual(out(source), "ก\n")
+
+    def test_chains(self):
+        source = ('นำเข้าวิธี strip เป็นตัดขอบ\n'
+                  'นำเข้าวิธี upper เป็นตัวโต\n'
+                  'ให้ประโยคเป็น "  ab  "\n'
+                  'แสดงตัวโตของตัดขอบของประโยค')
+        self.assertEqual(out(source), "AB\n")
+
+    def test_works_as_statement_head(self):
+        source = ('นำเข้าวิธี append เป็นใส่ท้าย\n'
+                  'ให้ของเป็น [1]\n'
+                  'ใส่ท้ายของของด้วย 2\n'
+                  'แสดงของ')
+        self.assertEqual(out(source), "[1, 2]\n")
+
+    def test_any_number_of_arguments(self):
+        """กริยาที่ผูกจากเมธอดรับกี่ค่าก็ได้ ต้องไม่ฟ้องจำนวนอาร์กิวเมนต์"""
+        source = ('นำเข้าวิธี rjust เป็นชิดขวา\n'
+                  'แสดงชิดขวาของ "7" ด้วย 3 ด้วย "0"')
+        self.assertEqual(out(source), "007\n")
+        self.assertNotIn(Code.WRONG_ARITY, codes(source))
+
+    def test_with_keyword_passes_extra_arguments(self):
+        self.assertEqual(
+            expr_py('แยกคำของ "a,b" ด้วย ","'), 'ผล = _th_split("a,b", ",")')
+
+
+class TestThaiLibraries(unittest.TestCase):
+    """คลังคำไทย — ขยายคำศัพท์ได้โดยไม่ต้องแตะคอมไพเลอร์"""
+
+    LIBRARIES = ("ข้อความ", "รายการ", "คณิต")
+
+    def test_each_library_compiles_clean(self):
+        for name in self.LIBRARIES:
+            with self.subTest(library=name):
+                self.assertEqual(codes(f"ใช้คลัง {name}\nแสดง 1"), [])
+
+    def test_unused_words_do_not_warn(self):
+        """คลังหนึ่งมีศัพท์เป็นสิบ ใช้จริงไม่กี่คำ — ต้องไม่เตือนว่าไม่ได้ใช้"""
+        self.assertNotIn(Code.UNUSED_VARIABLE,
+                         codes("ใช้คลัง คณิต\nแสดงปัดขึ้นของ 1.2"))
+
+    def test_every_word_usable_as_statement_head(self):
+        """ศัพท์ทุกคำในคลังต้องขึ้นต้นประโยคได้ ไม่ถูกตัดคำกลืนไปเป็นคีย์เวิร์ด"""
+        pattern = re.compile(r"^นำเข้า(?:วิธี)? \S+(?: จาก \S+)? เป็น(\S+)\s*$",
+                             re.M)
+        folder = Path(__file__).resolve().parent.parent / "thprog" / "คลัง"
+        for name in self.LIBRARIES:
+            words = pattern.findall(
+                (folder / f"{name}.th").read_text(encoding="utf-8"))
+            self.assertGreater(len(words), 5)
+            for word in words:
+                with self.subTest(library=name, word=word):
+                    self.assertNotIn("ของ", word[-3:],
+                                     'ห้ามลงท้ายด้วย "ของ"')
+                    code = py(f'ใช้คลัง {name}\nให้ค่าทดสอบเป็น "ก"\n'
+                              f"{word}ของค่าทดสอบ")
+                    self.assertIn(f"\n{word}(ค่าทดสอบ)", code)
+
+    def test_library_can_hold_real_thai_code(self):
+        """คลังคำไม่ได้มีแค่การผูกเมธอด — เขียนตรรกะเป็นภาษาไทยได้ด้วย"""
+        source = ("ใช้คลัง รายการ\n"
+                  'ให้ราคาเป็น {"ก": 1, "ข": 2}\n'
+                  "แสดงคู่ทั้งหมดของราคา")
+        self.assertEqual(out(source), "[['ก', 1], ['ข', 2]]\n")
+
+    def test_missing_library_reports_at_use_site(self):
+        found = codes("ใช้คลัง ไม่มีคลังนี้\nแสดง 1")
+        self.assertIn(Code.LIBRARY_ERROR, found)
+
+    def test_loading_twice_is_harmless(self):
+        self.assertEqual(codes("ใช้คลัง คณิต\nใช้คลัง คณิต\n"
+                               "แสดงปัดขึ้นของ 1.2"), [])
+
+
+class TestPreferThaiWord(unittest.TestCase):
+    """จุดยังใช้ได้ — แต่เตือนเมื่อมีคำไทยให้ใช้อยู่แล้ว"""
+
+    def test_warns_for_builtin_equivalent(self):
+        self.assertIn(Code.PREFER_THAI_WORD,
+                      codes('ให้ชื่อเป็น " ก "\nแสดงชื่อ.strip()'))
+
+    def test_warns_using_loaded_library_word(self):
+        bag = check_source('ใช้คลัง ข้อความ\nให้ชื่อเป็น "ก"\nแสดงชื่อ.title()',
+                           "<test>")
+        hints = [d.hint for d in bag if d.code == Code.PREFER_THAI_WORD]
+        self.assertTrue(any("ขึ้นต้นตัวใหญ่" in h for h in hints), hints)
+
+    def test_silent_when_no_thai_word_exists(self):
+        self.assertNotIn(Code.PREFER_THAI_WORD,
+                         codes('นำเข้า os.path\nแสดง os.path.basename("a/b")'))
+
+    def test_still_only_a_warning(self):
+        """เป็นทางออกฉุกเฉิน ไม่ใช่ข้อห้าม — ต้องคอมไพล์และรันได้ตามปกติ"""
+        self.assertEqual(out('ให้ชื่อเป็น " ก "\nแสดงชื่อ.strip()'), "ก\n")
+
+
 class TestExampleFiles(unittest.TestCase):
     def test_all_examples_compile(self):
         folder = Path(__file__).resolve().parent.parent / "examples"

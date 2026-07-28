@@ -1,4 +1,4 @@
 #!/usr/bin/env sh
 # ตัวสั่งงาน TH-Programming สำหรับ macOS / Linux (ใช้ได้โดยไม่ต้องติดตั้ง)
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-PYTHONPATH="$HERE:$PYTHONPATH" exec python3 -m thpro "$@"
+PYTHONPATH="$HERE:$PYTHONPATH" exec python3 -m thprog "$@"

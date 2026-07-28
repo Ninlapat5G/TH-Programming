@@ -65,6 +65,14 @@ class Index(Node):
 
 
 @dataclass
+class Attr(Node):
+    """เข้าถึงสมาชิกของอ็อบเจ็กต์ Python —  math.sqrt  ·  ข้อความ.upper"""
+    target: Node = None
+    name: str = ""
+    line: int = 0
+
+
+@dataclass
 class ListLit(Node):
     items: List[Node] = field(default_factory=list)
     line: int = 0
@@ -178,4 +186,57 @@ class Return(Node):
 @dataclass
 class ExprStmt(Node):
     expr: Node = None
+    line: int = 0
+    # โหมดโต้ตอบ/บรรทัดคำสั่ง: แสดงค่าที่ได้ออกมาเลย (ข้ามถ้าเป็นค่าว่าง)
+    # ไฟล์ .th ไม่เปิดโหมดนี้ พฤติกรรมของโปรแกรมที่เขียนไว้แล้วจึงไม่เปลี่ยน
+    show: bool = False
+
+
+@dataclass
+class Import(Node):
+    """นำเข้าโมดูลของ Python
+
+        module="math"                        ->  import math
+        module="math", alias="คณิต"           ->  import math as คณิต
+        module="math", names=["sqrt","pi"]   ->  from math import sqrt, pi
+        module="math", names=["sqrt"],
+                       alias="ราก"            ->  from math import sqrt as ราก
+    """
+    module: str = ""
+    names: Optional[List[str]] = None
+    alias: Optional[str] = None
+    line: int = 0
+
+    def bound_names(self):
+        """ชื่อที่คำสั่งนี้ทำให้ใช้งานได้ในโปรแกรม"""
+        if self.names:
+            return [self.alias] if self.alias else list(self.names)
+        if self.alias:
+            return [self.alias]
+        return [self.module.split(".")[0]]
+
+
+@dataclass
+class BindMethod(Node):
+    """ผูกเมธอดของ Python ให้เป็นกริยาไทย (UFCS)
+
+        นำเข้าวิธี strip เป็นตัดช่องว่าง
+
+    กลายเป็นฟังก์ชันอิสระที่รับตัวมันเป็นอาร์กิวเมนต์แรก จึงเขียนแบบไทยได้
+
+        ตัดช่องว่างของประโยค          แทน   ประโยค.strip()
+    """
+    method: str = ""
+    alias: str = ""
+    line: int = 0
+
+
+@dataclass
+class UseLibrary(Node):
+    """ใช้คลังคำไทย —  ใช้คลัง ข้อความ
+
+    ตัวแยกวิเคราะห์จะแทนที่โหนดนี้ด้วยเนื้อในของไฟล์คลังทันทีที่อ่านเจอ
+    จึงไม่มีโหนดชนิดนี้หลงเหลือถึงขั้นสร้างโค้ด
+    """
+    name: str = ""
     line: int = 0

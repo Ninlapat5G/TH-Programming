@@ -13,21 +13,44 @@
 เพื่อรายงานทุกจุดในรอบเดียว
 """
 
+import importlib.util
+
 from ..diagnostics import Code
-from ..lang.builtins import BUILTINS
+from ..lang.builtins import BUILTINS, THAI_FOR_METHOD
 from . import ast_nodes as A
 from .normalizer import suggest
-from .symbols import SymbolTable, VARIABLE, FUNCTION, PARAMETER, LOOP_VAR
+from .symbols import (SymbolTable, VARIABLE, FUNCTION, PARAMETER, LOOP_VAR,
+                      MODULE)
+
+
+def _module_installed(module):
+    """โมดูลนี้มีอยู่ในเครื่องหรือไม่ — ตรวจเฉพาะชื่อระดับบนสุด
+
+    ใช้ find_spec ซึ่ง "ค้นหา" อย่างเดียว ไม่ได้สั่งรันโค้ดของโมดูล
+    ถ้าตรวจไม่ได้ด้วยเหตุใดก็ตาม ให้ถือว่ามี (ไม่ฟ้อง) — เตือนผิดแย่กว่าไม่เตือน
+    """
+    try:
+        return importlib.util.find_spec(module.split(".")[0]) is not None
+    except (ImportError, ValueError, TypeError):
+        return True
 
 
 class Analyzer:
-    def __init__(self, bag, predefined=None):
+    def __init__(self, bag, predefined=None, report_unused=True):
         self.bag = bag
+        # โหมดพิมพ์สด (REPL / -c) ไม่ควรเตือนว่า "ตัวแปรไม่ได้ใช้"
+        # เพราะผู้ใช้กำลังจะพิมพ์บรรทัดถัดไปที่เอาไปใช้อยู่แล้ว
+        self.report_unused = report_unused
         self.table = SymbolTable(predefined)
         self.functions = {}          # ชื่อ -> (จำนวนพารามิเตอร์, บรรทัดที่ประกาศ)
         self.assigned_anywhere = set(predefined or ())
         self.loop_depth = 0
         self.func_depth = 0
+        # ชื่อที่มาจากคลังคำ ไม่ใช่สิ่งที่ผู้ใช้เขียนเอง จึงไม่เตือนว่า "ไม่ได้ใช้"
+        # คลังคำหนึ่งคลังมีศัพท์เป็นสิบ ปกติจะใช้จริงแค่ไม่กี่คำ
+        self.from_library = set()
+        # เมธอด Python -> คำไทยที่ใช้แทนได้ (จากคลังคำที่โหลดไว้ในโปรแกรมนี้)
+        self.thai_for_method = {}
 
     # ================================================== ทางเข้า
     def run(self, program):
@@ -45,6 +68,8 @@ class Analyzer:
         ออกจาก "มีอยู่ แต่ยังไม่ถึงคิว"
         """
         for node in body:
+            if getattr(node, "from_library", False):
+                self.from_library.update(_declares(node))
             if isinstance(node, A.FuncDef):
                 if node.name in self.functions:
                     self._warn(Code.DUPLICATE_FUNCTION, node,
@@ -58,6 +83,13 @@ class Analyzer:
                 self.assigned_anywhere.add(node.target.ident)
             elif isinstance(node, A.Ask):
                 self.assigned_anywhere.add(_name_of(node.target))
+            elif isinstance(node, A.Import):
+                self.assigned_anywhere.update(node.bound_names())
+            elif isinstance(node, A.BindMethod):
+                # กริยาที่ผูกจากเมธอดรับกี่ค่าก็ได้ จึงบันทึก arity เป็น None
+                self.functions[node.alias] = (None, node.line)
+                self.assigned_anywhere.add(node.alias)
+                self.thai_for_method[node.method] = f"{node.alias}ของ<ค่า>"
             elif isinstance(node, (A.ForEach, A.CountLoop)):
                 self.assigned_anywhere.add(node.var)
                 self._collect(node.body)
@@ -170,6 +202,36 @@ class Analyzer:
         elif isinstance(node, A.ExprStmt):
             self.expr(node.expr)
 
+        elif isinstance(node, A.Import):
+            self._import(node)
+
+        elif isinstance(node, A.BindMethod):
+            self.table.declare(node.alias, FUNCTION, node.line)
+
+    def _import(self, node):
+        for name in node.bound_names():
+            self.table.declare(name, MODULE, node.line)
+        if not _module_installed(node.module):
+            top = node.module.split(".")[0]
+            self._warn(Code.MODULE_NOT_FOUND, node,
+                       f'ไม่พบไลบรารี "{node.module}" ในเครื่องนี้',
+                       hint=f"ถ้าเป็นไลบรารีภายนอก ต้องติดตั้งก่อนด้วย  "
+                            f"pip install {top}")
+
+    def _suggest_thai_word(self, node):
+        """เตือนเมื่อใช้จุดทั้งที่มีคำไทยให้ใช้อยู่แล้ว
+
+        จุดยังใช้ได้เสมอ — ทุกภาษาต้องมีทางเชื่อมออกไปหาภาษาอื่น (FFI)
+        เป้าหมายไม่ใช่ห้ามใช้ แต่คือทำให้โค้ดปกติไม่ต้องแตะมัน
+        """
+        thai = self.thai_for_method.get(node.name) or \
+            THAI_FOR_METHOD.get(node.name)
+        if not thai:
+            return
+        self._warn(Code.PREFER_THAI_WORD, node,
+                   f'".{node.name}" มีคำไทยให้ใช้อยู่แล้ว',
+                   hint=f"เขียนเป็น  {thai}  จะอ่านเป็นประโยคไทยได้ทั้งบรรทัด")
+
     def _loop(self, body):
         self.loop_depth += 1
         self.block(body)
@@ -200,6 +262,12 @@ class Analyzer:
             self.expr(node.target)
             self.expr(node.key)
 
+        elif isinstance(node, A.Attr):
+            # ตรวจได้แค่ตัวตั้งต้น ส่วนชื่อสมาชิกเป็นของฝั่ง Python
+            # คอมไพเลอร์ไม่รู้จักเนื้อในของโมดูล จึงต้องปล่อยผ่านอย่างตั้งใจ
+            self.expr(node.target)
+            self._suggest_thai_word(node)
+
         elif isinstance(node, A.ListLit):
             for item in node.items:
                 self.expr(item)
@@ -224,7 +292,8 @@ class Analyzer:
         if name in self.functions:
             self.table.mark_read(name)
             need, where = self.functions[name]
-            if len(node.args) != need:
+            # need is None = รับกี่ค่าก็ได้ (กริยาที่ผูกมาจากเมธอด Python)
+            if need is not None and len(node.args) != need:
                 self._error(Code.WRONG_ARITY, node.func,
                             f'ฟังก์ชัน "{name}" ต้องการ {need} ค่า '
                             f"แต่ได้รับ {len(node.args)} ค่า",
@@ -260,13 +329,19 @@ class Analyzer:
         symbol.reads += 1
 
     def _report_unused(self, scope):
+        if not self.report_unused:
+            return
         for symbol in scope.unused():
-            if symbol.line:
-                self.bag.warning(
-                    Code.UNUSED_VARIABLE,
-                    f'ตัวแปร "{symbol.name}" ถูกกำหนดค่า แต่ไม่เคยถูกนำไปใช้',
-                    phase="semantic", line=symbol.line,
-                    hint="ถ้าไม่ได้ใช้แล้ว ลบทิ้งได้เลย")
+            if not symbol.line or symbol.name in self.from_library:
+                continue
+            if symbol.kind == MODULE:
+                message = f'นำเข้าไลบรารี "{symbol.name}" มาแต่ไม่เคยถูกใช้'
+            else:
+                message = (f'ตัวแปร "{symbol.name}" ถูกกำหนดค่า '
+                           f"แต่ไม่เคยถูกนำไปใช้")
+            self.bag.warning(Code.UNUSED_VARIABLE, message,
+                             phase="semantic", line=symbol.line,
+                             hint="ถ้าไม่ได้ใช้แล้ว ลบทิ้งได้เลย")
 
     def _error(self, code, node, message, hint=None, length=0):
         self.bag.error(code, message, phase="semantic",
@@ -281,11 +356,24 @@ class Analyzer:
                          length=length, hint=hint)
 
 
+def _declares(node):
+    """ชื่อที่คำสั่งหนึ่งคำสั่งประกาศขึ้นมา (ใช้ตอนทำเครื่องหมายว่ามาจากคลังคำ)"""
+    if isinstance(node, A.Import):
+        return node.bound_names()
+    if isinstance(node, A.BindMethod):
+        return [node.alias]
+    if isinstance(node, A.FuncDef):
+        return [node.name]
+    if isinstance(node, A.Assign) and isinstance(node.target, A.Name):
+        return [node.target.ident]
+    return []
+
+
 def _name_of(target):
     if isinstance(target, str):
         return target
     return target.ident if isinstance(target, A.Name) else str(target)
 
 
-def analyze(program, bag, predefined=None):
-    return Analyzer(bag, predefined).run(program)
+def analyze(program, bag, predefined=None, report_unused=True):
+    return Analyzer(bag, predefined, report_unused).run(program)

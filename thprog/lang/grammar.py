@@ -129,6 +129,18 @@ def _exprstmt(s, line, body):
     return A.ExprStmt(s["expr"], line)
 
 
+def _import(s, line, body):
+    return A.Import(s["module"], s.get("names"), s.get("alias"), line)
+
+
+def _bind_method(s, line, body):
+    return A.BindMethod(s["method"], s["alias"], line)
+
+
+def _use_library(s, line, body):
+    return A.UseLibrary(s["name"], line)
+
+
 def _break(s, line, body):
     return A.Break(line)
 
@@ -139,6 +151,26 @@ def _continue(s, line, body):
 
 # ====================================================== ตารางรูปประโยค
 PATTERNS = [
+
+    # ---------------------------------------------------------- นำเข้าไลบรารี
+    # วางไว้บนสุดเพราะรูปเฉพาะเจาะจงกว่ารูปอื่นทั้งหมด และใช้คีย์เวิร์ดของตัวเอง
+    Pattern("ใช้คลังคำ",
+            [Kw("IMPORT"), Kw("LIBRARY"), Slot("name", "name")], _use_library),
+    Pattern("นำเข้าวิธี",
+            [Kw("IMPORT"), Kw("METHOD"), Slot("method", "ident"),
+             Kw("BE"), Slot("alias", "name")], _bind_method),
+    Pattern("นำเข้าชื่อจากโมดูลตั้งชื่อ",
+            [Kw("IMPORT"), Slot("names", "namelist"), Kw("FROM"),
+             Slot("module", "module"), Kw("BE"), Slot("alias", "name")],
+            _import),
+    Pattern("นำเข้าชื่อจากโมดูล",
+            [Kw("IMPORT"), Slot("names", "namelist"), Kw("FROM"),
+             Slot("module", "module")], _import),
+    Pattern("นำเข้าโมดูลตั้งชื่อ",
+            [Kw("IMPORT"), Slot("module", "module"), Kw("BE"),
+             Slot("alias", "name")], _import),
+    Pattern("นำเข้าโมดูล",
+            [Kw("IMPORT"), Slot("module", "module")], _import),
 
     # ---------------------------------------------------------- แสดงผล
     Pattern("แสดง",

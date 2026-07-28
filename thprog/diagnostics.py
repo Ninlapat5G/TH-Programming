@@ -19,7 +19,7 @@
     เพื่อรายงานทุกจุดในรอบเดียว
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 ERROR = "error"
@@ -60,6 +60,7 @@ class Code:
     DUPLICATE_ELSE = "TH205"
     BAD_EXPRESSION = "TH206"
     RESERVED_AS_NAME = "TH207"
+    LIBRARY_ERROR = "TH208"
 
     # --- semantic ---
     UNDEFINED_NAME = "TH301"
@@ -83,6 +84,8 @@ class Code:
     USED_BEFORE_ASSIGN = "TW102"
     UNUSED_VARIABLE = "TW103"
     UNREACHABLE_CODE = "TW104"
+    MODULE_NOT_FOUND = "TW105"
+    PREFER_THAI_WORD = "TW106"
 
 
 @dataclass

@@ -19,6 +19,7 @@ FUNCTION = "ฟังก์ชัน"
 PARAMETER = "พารามิเตอร์"
 LOOP_VAR = "ตัวแปรลูป"
 BUILTIN = "ฟังก์ชันสำเร็จรูป"
+MODULE = "ไลบรารี"
 
 
 @dataclass
@@ -81,9 +82,9 @@ class Scope:
         return names
 
     def unused(self):
-        """ตัวแปรที่ประกาศแล้วไม่เคยถูกอ่าน (ไม่นับพารามิเตอร์และตัวแปรลูป)"""
+        """ชื่อที่ประกาศแล้วไม่เคยถูกอ่าน (ไม่นับพารามิเตอร์และตัวแปรลูป)"""
         return [s for s in self.symbols.values()
-                if not s.used and s.kind in (VARIABLE,)]
+                if not s.used and s.kind in (VARIABLE, MODULE)]
 
 
 class SymbolTable:

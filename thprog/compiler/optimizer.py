@@ -165,6 +165,9 @@ class Optimizer:
             node.target = self.expr(node.target)
             node.key = self.expr(node.key)
 
+        elif isinstance(node, A.Attr):
+            node.target = self.expr(node.target)
+
         elif isinstance(node, A.ListLit):
             node.items = [self.expr(i) for i in node.items]
 

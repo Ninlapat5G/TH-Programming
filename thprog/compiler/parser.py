@@ -26,6 +26,7 @@
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List
 
 from ..diagnostics import Code, DiagnosticBag
@@ -41,6 +42,12 @@ from .wordseg import Segmenter
 
 def _is_name_token(tok):
     return tok.kind == "WORD" and not (tok.ids & RESERVED_IN_EXPR)
+
+
+def _is_module_token(tok):
+    """ท่อนหนึ่งของชื่อโมดูล Python — ต้องเป็นตัวระบุแบบ ASCII"""
+    return (tok.kind == "WORD" and tok.text.isascii()
+            and tok.text.isidentifier())
 
 
 _RANK = {id(p): i for i, p in enumerate(PATTERNS)}
@@ -88,12 +95,17 @@ class Parser:
     # จำนวนข้อผิดพลาดไวยากรณ์สูงสุดที่จะรายงาน ก่อนจะยอมแพ้
     MAX_ERRORS = 20
 
-    def __init__(self, lines, segmenter=None, bag=None):
+    # โฟลเดอร์ที่เก็บคลังคำไทย — หาในโปรเจกต์ของผู้ใช้ก่อน แล้วค่อยหาในตัวภาษา
+    LIBRARY_DIR = "คลัง"
+
+    def __init__(self, lines, segmenter=None, bag=None, loaded=None):
         self.lines = lines
         self.pos = 0
         self.bag = bag if bag is not None else DiagnosticBag()
         self.seg = segmenter or Segmenter(lexicon.WORD_IDS)
         self._cache = {}
+        # ชื่อคลังที่โหลดไปแล้ว — ใช้ร่วมกับตัวแยกวิเคราะห์ลูก กันโหลดวนซ้ำ
+        self.loaded = loaded if loaded is not None else set()
 
     # ================================================== ระดับโปรแกรม
     def parse(self):
@@ -198,8 +210,72 @@ class Parser:
         for match in reading.matches:
             node = match.pattern.build(match.slots, line.lineno, body)
             node.line = line.lineno
-            out.append((node, match.pattern.role))
+            if isinstance(node, A.UseLibrary):
+                out.extend((n, "stmt") for n in self._load_library(node, line))
+            else:
+                out.append((node, match.pattern.role))
         return out
+
+    # ============================================ คลังคำไทย
+    def _library_path(self, name):
+        """หาไฟล์คลัง — ของผู้ใช้มาก่อนของภาษาเสมอ จึงเขียนทับคลังมาตรฐานได้"""
+        here = Path(__file__).resolve().parent.parent
+        for folder in (Path.cwd() / self.LIBRARY_DIR, here / self.LIBRARY_DIR):
+            path = folder / f"{name}.th"
+            if path.is_file():
+                return path
+        return None
+
+    def _load_library(self, node, line):
+        """อ่านไฟล์คลัง แล้วคืนคำสั่งข้างในเพื่อแทรกลงตรงจุดที่เรียกใช้
+
+        ตัวตัดคำถูกใช้ร่วมกัน คำศัพท์ที่คลังประกาศจึงเข้าพจนานุกรมทันที
+        บรรทัดถัด ๆ ไปของผู้ใช้ก็ตัดคำถูกตั้งแต่ครั้งแรก
+
+        ข้อผิดพลาดภายในคลังถูกยุบเหลือข้อความเดียวที่บรรทัด "ใช้คลัง"
+        เพราะคลังเป็นสิ่งที่ผู้ใช้ *เรียกใช้* ไม่ใช่สิ่งที่ผู้ใช้เขียน
+        การชี้ไปที่บรรทัดในไฟล์คลังจึงไม่ช่วยอะไร
+        """
+        if node.name in self.loaded:
+            return []
+        path = self._library_path(node.name)
+        if path is None:
+            self.bag.error(Code.LIBRARY_ERROR,
+                           f'ไม่พบคลังคำชื่อ "{node.name}"',
+                           phase="syntax", line=line.lineno,
+                           hint=f"คลังมาตรฐานที่มีให้: "
+                                f"{' · '.join(self.available_libraries())}")
+            return []
+        self.loaded.add(node.name)
+
+        text = path.read_text(encoding="utf-8")
+        inner = DiagnosticBag(text, str(path))
+        sub = Parser(tokenizer.tokenize(text, str(path)),
+                     self.seg, inner, self.loaded)
+        body = sub.parse().body
+        if inner.has_errors():
+            first = inner.errors[0]
+            self.bag.error(Code.LIBRARY_ERROR,
+                           f'คลังคำ "{node.name}" มีปัญหาข้างใน',
+                           phase="syntax", line=line.lineno,
+                           hint=f"{path.name} บรรทัด {first.line}: {first.message}")
+            return []
+
+        # คำสั่งที่มาจากคลังชี้กลับมาที่บรรทัด "ใช้คลัง" ของผู้ใช้เสมอ
+        # เพื่อให้ข้อความผิดพลาดและตารางเทียบบรรทัดยังตรงกับไฟล์ที่ผู้ใช้เขียน
+        for item in _walk_nodes(body):
+            item.line = line.lineno
+            item.from_library = True
+        return body
+
+    @classmethod
+    def available_libraries(cls):
+        here = Path(__file__).resolve().parent.parent / cls.LIBRARY_DIR
+        found = set()
+        for folder in (Path.cwd() / cls.LIBRARY_DIR, here):
+            if folder.is_dir():
+                found |= {p.stem for p in folder.glob("*.th")}
+        return sorted(found)
 
     def _child_block(self, line, indent):
         if self.pos >= len(self.lines) or self.lines[self.pos].indent <= indent:
@@ -492,6 +568,31 @@ class Parser:
                 return attempt(CAST_TYPES[toks[ti].text], ti + 1)
             return None
 
+        if kind == "ident":
+            # ตัวระบุของฝั่ง Python ตัวเดียว (ชื่อเมธอด) — ต้องเป็น ASCII
+            if ti < len(toks) and _is_module_token(toks[ti]):
+                return attempt(toks[ti].text, ti + 1)
+            return None
+
+        if kind == "module":
+            # ชื่อโมดูลของ Python เป็นอักษรละติน และต่อกันด้วยจุดได้
+            #     math  ·  os.path  ·  xml.etree.ElementTree
+            #
+            # บังคับให้เป็น ASCII เพราะทั้ง stdlib และ PyPI ใช้ ASCII ทั้งหมด
+            # ถ้าปล่อยให้เป็นภาษาไทยได้ ชื่อจะโดนตัดคำเป็นหลายก้อนแล้วฟ้องมั่ว
+            parts, pos = [], ti
+            while pos < len(toks) and _is_module_token(toks[pos]):
+                parts.append(toks[pos].text)
+                pos += 1
+                got = attempt(".".join(parts), pos)
+                if got is not None:
+                    return got
+                if pos < len(toks) and "DOT" in toks[pos].ids:
+                    pos += 1
+                    continue
+                break
+            return None
+
         if kind == "namelist":
             names, pos = [], ti
             while pos < len(toks) and _is_name_token(toks[pos]):
@@ -552,7 +653,9 @@ class Parser:
             self._cache = saved_cache
 
     # ================================================== พจนานุกรมที่เรียนรู้ได้
-    _NAME_KEYS = ("var", "name", "target")
+    # "alias" อยู่ในชุดนี้ด้วย เพราะกริยาไทยที่ผูกจากเมธอดต้องเข้าพจนานุกรม
+    # ตัดคำทันที ไม่งั้นบรรทัดที่เรียกใช้จะถูกซอยกลับเป็นคำย่อย ๆ
+    _NAME_KEYS = ("var", "name", "target", "alias")
 
     def _learn(self, slots):
         """จำชื่อที่ผู้ใช้เพิ่งประกาศ เพื่อให้บรรทัดถัดไปตัดคำถูกตั้งแต่แรก
@@ -588,6 +691,18 @@ class Parser:
 
         return ("ตรวจรูปประโยค เช่น  แสดง <ค่า> / ให้ <ตัวแปร> เป็น <ค่า> / "
                 "ถ้า <เงื่อนไข> / ทำซ้ำ <จำนวน> ครั้ง")
+
+
+def _walk_nodes(body):
+    """ไล่ทุกโหนดคำสั่งในต้นไม้ (ใช้ตอนแทรกคำสั่งจากคลังคำ)"""
+    for node in body or ():
+        yield node
+        for attr in ("body", "orelse"):
+            child = getattr(node, attr, None)
+            if isinstance(child, list):
+                yield from _walk_nodes(child)
+        for _cond, branch in getattr(node, "branches", ()) or ():
+            yield from _walk_nodes(branch)
 
 
 def parse(lines, segmenter=None, bag=None):

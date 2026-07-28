@@ -100,10 +100,27 @@ class ExprParser:
                 key = self.parse()
                 self.eat("RBRACK", "เครื่องหมาย ]")
                 node = A.Index(node, key, tok.line)
+            elif "DOT" in tok.ids:
+                # เข้าถึงสมาชิกแบบ Python:  math.sqrt(2) · ข้อความ.upper()
+                self.next()
+                name = self.peek()
+                if name is None or name.kind != "WORD":
+                    self.fail("ต้องการชื่อสมาชิกหลังเครื่องหมายจุด")
+                self.next()
+                node = A.Attr(node, name.text, tok.line)
             elif "OF" in tok.ids and isinstance(node, A.Name):
                 # รูปแบบภาษาพูด:  ความยาว ของ รายชื่อ
+                #
+                # ค่าที่สองขึ้นไปต่อด้วย "ด้วย" เพื่อให้กริยาสองกรรมเขียนเป็น
+                # ประโยคไทยได้โดยไม่ต้องใช้วงเล็บ
+                #     แยกของบรรทัดด้วย ","        ->  แยก(บรรทัด, ",")
+                #     แทนที่ของชื่อด้วย "ก" ด้วย "ข"
                 self.next()
-                node = A.Call(node, [self.parse(4)], tok.line)
+                args = [self.parse(4)]
+                while self.at("WITH"):
+                    self.next()
+                    args.append(self.parse(4))
+                node = A.Call(node, args, tok.line)
             else:
                 break
         return node

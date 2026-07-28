@@ -2,7 +2,7 @@
 REM ==========================================================
 REM  TH-Programming - demo runner
 REM  Double-click this file to see the language in action.
-REM  Works even if you have NOT installed thpro yet.
+REM  Works even if you have NOT installed thprog yet.
 REM
 REM  This file is intentionally ASCII-only: cmd.exe parses .bat
 REM  files with the system codepage, so Thai text inside a .bat
@@ -22,6 +22,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -m thpro demo
+python -m thprog demo
 echo.
 pause

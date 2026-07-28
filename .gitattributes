@@ -7,4 +7,4 @@
 # สคริปต์เชลล์และไฟล์โปรแกรมภาษาไทยต้องเป็น LF เสมอ
 *.sh   text eol=lf
 *.th   text eol=lf
-bin/thpro text eol=lf
+bin/thprog text eol=lf

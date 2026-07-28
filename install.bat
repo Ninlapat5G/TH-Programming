@@ -27,7 +27,7 @@ if errorlevel 1 (
 for /f "delims=" %%v in ('python --version') do echo [ OK ] found %%v
 
 echo.
-echo Installing the "thpro" command ...
+echo Installing the "thprog" command ...
 python -m pip install --disable-pip-version-check -e . >nul 2>&1
 if errorlevel 1 (
     echo [FAIL] install failed. Run this yourself to see details:
@@ -37,10 +37,10 @@ if errorlevel 1 (
 )
 
 echo.
-python -m thpro doctor
+python -m thprog doctor
 if errorlevel 1 (
     echo.
-    echo Note: if the "thpro" command is not found, close and reopen cmd.
+    echo Note: if the "thprog" command is not found, close and reopen cmd.
     pause
     exit /b 1
 )
@@ -48,7 +48,7 @@ if errorlevel 1 (
 echo.
 echo Done. Try this next:
 echo.
-echo     thpro examples\demo.th
-echo     thpro help
+echo     thprog examples\demo.th
+echo     thprog help
 echo.
 pause

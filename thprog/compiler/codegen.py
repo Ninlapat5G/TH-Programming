@@ -66,8 +66,11 @@ class CodeGen:
     # ------------------------------------------------ ทางเข้า
     def generate(self, program):
         # ฟังก์ชันที่ผู้ใช้ประกาศเอง ต้องไม่ถูกชื่อฟังก์ชันสำเร็จรูปทับ
+        # (รวมกริยาไทยที่ผูกมาจากเมธอด Python ด้วย — คลังคำมีสิทธิ์ทับ builtin)
         self.user_funcs = {n.name for n in _walk(program.body)
                            if isinstance(n, A.FuncDef)}
+        self.user_funcs |= {n.alias for n in _walk(program.body)
+                            if isinstance(n, A.BindMethod)}
         body_start = len(self.lines)
         self.block(program.body)
         body = self.lines[body_start:]
@@ -183,7 +186,33 @@ class CodeGen:
                 self.emit(f"return {self.expr(node.value)}")
 
         elif isinstance(node, A.ExprStmt):
-            self.emit(self.expr(node.expr))
+            if node.show:
+                self.use("show")
+                self.emit(f"_th_show({self.expr(node.expr)})")
+            else:
+                self.emit(self.expr(node.expr))
+
+        elif isinstance(node, A.Import):
+            # ปล่อยไว้ตรงตำแหน่งเดิมในโปรแกรม เพื่อให้เลขบรรทัดยังเทียบกลับได้
+            # และเพื่อให้ผู้อ่านเห็นว่าบรรทัดภาษาไทยบรรทัดไหนกลายเป็น import ใด
+            if node.names:
+                names = ", ".join(
+                    f"{n} as {to_py_name(node.alias)}"
+                    if node.alias and len(node.names) == 1 else n
+                    for n in node.names)
+                self.emit(f"from {node.module} import {names}")
+            elif node.alias:
+                self.emit(f"import {node.module} as {to_py_name(node.alias)}")
+            else:
+                self.emit(f"import {node.module}")
+
+        elif isinstance(node, A.BindMethod):
+            # พลิก  ค่า.เมธอด(...)  ให้เป็น  กริยา(ค่า, ...)  ตามลำดับคำแบบไทย
+            self.emit(f"def {to_py_name(node.alias)}(ตัวมัน, *ค่า, **ค่าที่ตั้งชื่อ):")
+            self.indent += 1
+            self.emit(f"return ตัวมัน.{node.method}(*ค่า, **ค่าที่ตั้งชื่อ)")
+            self.indent -= 1
+            self.emit("")
 
         else:
             raise AssertionError(f"ยังไม่รองรับโหนด {type(node).__name__}")
@@ -240,6 +269,9 @@ class CodeGen:
 
         if isinstance(node, A.Index):
             return f"{self.expr(node.target, ATOM_PREC)}[{self.expr(node.key)}]"
+
+        if isinstance(node, A.Attr):
+            return f"{self.expr(node.target, ATOM_PREC)}.{node.name}"
 
         if isinstance(node, A.ListLit):
             return "[" + ", ".join(self.expr(i) for i in node.items) + "]"

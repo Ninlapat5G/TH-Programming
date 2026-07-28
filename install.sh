@@ -13,10 +13,10 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "[ผ่าน] พบ $(python3 --version)"
-echo "กำลังติดตั้งคำสั่ง thpro ..."
+echo "กำลังติดตั้งคำสั่ง thprog ..."
 python3 -m pip install --disable-pip-version-check -e . >/dev/null
 
 echo
-thpro doctor
+thprog doctor
 echo
-echo "ติดตั้งเสร็จแล้ว ลองพิมพ์:  thpro examples/demo.th"
+echo "ติดตั้งเสร็จแล้ว ลองพิมพ์:  thprog examples/demo.th"

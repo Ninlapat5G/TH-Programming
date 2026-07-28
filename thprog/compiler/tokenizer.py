@@ -23,7 +23,7 @@ THAI_DIGITS = "๐๑๒๓๔๕๖๗๘๙"
 QUOTE_PAIRS = {'"': '"', "'": "'", "“": "”", "‘": "’"}
 
 TWO_CHAR_OPS = ("==", "!=", ">=", "<=", "//", "**")
-ONE_CHAR_OPS = "+-*/%=<>()[]{},:;"
+ONE_CHAR_OPS = "+-*/%=<>()[]{},:;."
 
 COMMENT_WORDS = ("หมายเหตุ", "คอมเมนต์", "อธิบาย")
 
@@ -217,8 +217,13 @@ def _split_runs(run, col, lineno, raw, chunks, emit):
     start = 0
     while start < len(run):
         script = _script_of(run[start])
+        # ตัวระบุแบบละตินมีตัวเลขปนได้ทุกตำแหน่งหลังตัวแรก
+        #     log10 · sha256 · utf8 · COLOR_BGR2GRAY
+        # ส่วนตัวเลขที่ตามหลังภาษาไทยไม่รวมเข้าด้วยกัน เพราะ "คะแนน80"
+        # ต้องแยกเป็นชื่อตัวแปรกับตัวเลข
+        allowed = {"latin", "digit"} if script == "latin" else {script}
         stop = start
-        while stop < len(run) and _script_of(run[stop]) == script:
+        while stop < len(run) and _script_of(run[stop]) in allowed:
             stop += 1
         piece = run[start:stop]
 

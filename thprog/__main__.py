@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""รองรับ  python -m thpro <ไฟล์.th>"""
+"""รองรับ  python -m thprog <ไฟล์.th>"""
 
 import sys
 

@@ -33,6 +33,7 @@ from .diagnostics import Code, DiagnosticBag
 from .errors import CompileError, LexError, RuntimeThaiError, ThaiError
 from .lang import lexicon
 from .lang.builtins import BUILTINS, CAST_TYPES
+from .compiler.ast_nodes import ExprStmt as ASTExprStmt
 from .compiler.tokenizer import tokenize
 from .compiler.wordseg import Segmenter
 from .compiler.parser import parse
@@ -82,12 +83,14 @@ def new_segmenter():
 
 # ======================================================================
 def compile_source(source, name="<th>", predefined=None, segmenter=None,
-                   optimize_level=1):
+                   optimize_level=1, auto_show=False):
     """แปลซอร์สภาษาไทยเป็นโค้ด Python
 
     predefined     : ชื่อที่ถือว่ามีอยู่แล้ว (ใช้ตอนคอมไพล์ทีละบรรทัดในโหมดโต้ตอบ)
     segmenter      : ตัวตัดคำที่ใช้ร่วมกันข้ามการเรียก (ใช้ในโหมดโต้ตอบ)
     optimize_level : 0 = ไม่ปรับ, 1 = พับค่าคงที่และตัดโค้ดตาย
+    auto_show      : แสดงค่าของนิพจน์เดี่ยวที่ระดับบนสุดโดยอัตโนมัติ
+                     (เปิดเฉพาะโหมดโต้ตอบและ -c เท่านั้น ไฟล์ .th ไม่เปิด)
 
     โยน CompileError ถ้าพบข้อผิดพลาด โดยข้างในมีรายการปัญหาทั้งหมด
     """
@@ -103,10 +106,17 @@ def compile_source(source, name="<th>", predefined=None, segmenter=None,
     # ---- 2-4. ตัดคำ + ไวยากรณ์ (กู้คืนได้ รายงานได้หลายจุด)
     ast, bag = parse(lines, segmenter or new_segmenter(), bag)
 
+    # เขียนโค้ดสั้น ๆ แล้วอยากเห็นผลทันที เหมือนพิมพ์ในเครื่องคิดเลข
+    # ทำเฉพาะระดับบนสุด เพื่อไม่ให้นิพจน์ในลูปหรือในฟังก์ชันพ่นค่าออกมาเอง
+    if auto_show:
+        for node in ast.body:
+            if isinstance(node, ASTExprStmt):
+                node.show = True
+
     # ---- 5. ความหมาย ส่วนที่ 1: ผูกชื่อกับสัญลักษณ์
     # วิเคราะห์ต่อแม้ไวยากรณ์จะพังบางบรรทัด เพื่อรายงานปัญหาให้ครบในรอบเดียว
     # (บรรทัดที่พังถูกข้ามไปแล้ว จึงไม่สร้างข้อผิดพลาดลูกโซ่)
-    analyze(ast, bag, predefined)
+    analyze(ast, bag, predefined, report_unused=not auto_show)
 
     # ---- 6. ความหมาย ส่วนที่ 2: ชนิดข้อมูล
     # ข้ามเมื่อผูกชื่อไม่ผ่าน เพราะชนิดของชื่อที่ไม่มีจริงย่อมเดาไม่ได้
