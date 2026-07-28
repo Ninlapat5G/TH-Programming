@@ -46,6 +46,7 @@ _PHASE_LABEL = {
 #     TH1xx  ระดับตัวอักษร      TH2xx  ระดับไวยากรณ์
 #     TH3xx  ระดับความหมาย      TH4xx  ขณะทำงาน
 #     TH5xx  ภายในคอมไพเลอร์    TW1xx  คำเตือน
+#     TN1xx  หมายเหตุ (ไม่นับรวมในสรุป)
 # ======================================================================
 class Code:
     # --- lexical ---
@@ -86,6 +87,9 @@ class Code:
     UNREACHABLE_CODE = "TW104"
     MODULE_NOT_FOUND = "TW105"
     PREFER_THAI_WORD = "TW106"
+
+    # --- หมายเหตุ (ไม่นับเป็นข้อผิดพลาดหรือคำเตือน) ---
+    SHELL_ATE_QUOTES = "TN101"
 
 
 @dataclass
@@ -193,6 +197,11 @@ class DiagnosticBag:
     def warning(self, code, message, **kw):
         kw.setdefault("phase", "semantic")
         return self.add(code, WARNING, message, **kw)
+
+    def note(self, code, message, **kw):
+        """ข้อสังเกตที่อาจช่วยหาต้นเหตุ — ไม่นับรวมในสรุปผลการคอมไพล์"""
+        kw.setdefault("phase", "lex")
+        return self.add(code, NOTE, message, **kw)
 
     # ------------------------------------------------------------------
     @property

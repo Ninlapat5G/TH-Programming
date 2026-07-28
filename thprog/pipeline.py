@@ -82,8 +82,26 @@ def new_segmenter():
 
 
 # ======================================================================
+_QUOTES = "\"'“”‘’"
+
+
+def _shell_ate_quotes(source):
+    """ซอร์สที่มาจากอาร์กิวเมนต์บรรทัดคำสั่ง แต่ไม่เหลือเครื่องหมายคำพูดเลย
+
+        thprog "แสดง"สวัสดี""      cmd.exe ส่งมาถึงจริง ๆ แค่  แสดงสวัสดี
+
+    เชลล์แกะฟันหนูออกไปก่อนที่คอมไพเลอร์จะได้เห็น ข้อความจึงกลายเป็นชื่อตัวแปร
+    คอมไพเลอร์ฟ้องถูกต้องแล้ว แต่ผู้ใช้จะเดาต้นเหตุไม่ออกเลย
+
+    ตรวจที่ระดับซอร์สทั้งไฟล์ จึงใช้ได้กับ **ข้อผิดพลาดทุกชนิด** ไม่ใช่แค่
+    "ไม่รู้จักตัวแปร" — ไวยากรณ์พัง ชนิดข้อมูลผิด หรืออะไรก็ตามที่เกิดจาก
+    สาเหตุเดียวกันนี้ ก็ได้ข้อสังเกตเดียวกัน
+    """
+    return not any(q in source for q in _QUOTES)
+
+
 def compile_source(source, name="<th>", predefined=None, segmenter=None,
-                   optimize_level=1, auto_show=False):
+                   optimize_level=1, auto_show=False, shell_arg=False):
     """แปลซอร์สภาษาไทยเป็นโค้ด Python
 
     predefined     : ชื่อที่ถือว่ามีอยู่แล้ว (ใช้ตอนคอมไพล์ทีละบรรทัดในโหมดโต้ตอบ)
@@ -124,6 +142,12 @@ def compile_source(source, name="<th>", predefined=None, segmenter=None,
     if not bag.has_errors():
         typecheck(ast, bag, predefined)
     if bag.has_errors():
+        if shell_arg and _shell_ate_quotes(source):
+            bag.note(Code.SHELL_ATE_QUOTES,
+                     "โค้ดที่ได้รับมาไม่มีเครื่องหมายคำพูดเลยสักตัว",
+                     hint='ถ้าเขียนข้อความไว้ เชลล์น่าจะแกะฟันหนูออกไปแล้ว '
+                          '— บน cmd ให้ใช้ฟันหนูเดี่ยวข้างใน เช่น  '
+                          'thprog "แสดง \'สวัสดี\'"')
         raise CompileError(bag, name)
 
     # ---- 7. ปรับให้เหมาะที่สุด
@@ -139,10 +163,11 @@ def compile_source(source, name="<th>", predefined=None, segmenter=None,
     return Program(python, bag, linemap, ast, source, name, stats)
 
 
-def check_source(source, name="<th>"):
+def check_source(source, name="<th>", shell_arg=False):
     """ตรวจอย่างเดียว ไม่โยนข้อผิดพลาด — คืน DiagnosticBag เสมอ"""
     try:
-        return compile_source(source, name).diagnostics
+        return compile_source(source, name,
+                              shell_arg=shell_arg).diagnostics
     except CompileError as err:
         return err.bag
 

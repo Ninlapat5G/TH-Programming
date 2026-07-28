@@ -85,7 +85,7 @@ def _read(path):
 
 
 def _source(args):
-    """ซอร์สที่จะคอมไพล์ — คืน (โค้ด, ชื่ออ้างอิง, แสดงค่าอัตโนมัติหรือไม่)
+    """ซอร์สที่จะคอมไพล์ — คืน (โค้ด, ชื่ออ้างอิง, พิมพ์สด, มาจากเชลล์)
 
     รับได้สามทาง เหมือนที่ python เองรองรับ
         thprog โปรแกรม.th          จากไฟล์
@@ -96,11 +96,12 @@ def _source(args):
     ไฟล์ .th ไม่เปิดโหมดนี้ โปรแกรมที่เขียนไว้แล้วจึงทำงานเหมือนเดิมทุกประการ
     """
     if getattr(args, "command", None) is not None:
-        return args.command, "<คำสั่ง>", True
+        # ทางเดียวที่ผ่าน "การแกะอาร์กิวเมนต์ของเชลล์" มา
+        return args.command, "<คำสั่ง>", True, True
     path = getattr(args, "file", None)
     if path in (None, "-"):
-        return sys.stdin.read(), "<stdin>", True
-    return _read(path), path, False
+        return sys.stdin.read(), "<stdin>", True, False
+    return _read(path), path, False, False
 
 
 def _need_source(args):
@@ -128,8 +129,8 @@ def _report(program, color):
 def cmd_run(args):
     if not _need_source(args):
         return 1
-    source, name, live = _source(args)
-    program = compile_source(source, name, auto_show=live,
+    source, name, live, shell = _source(args)
+    program = compile_source(source, name, auto_show=live, shell_arg=shell,
                              optimize_level=0 if args.no_optimize else 1)
     if not args.quiet:
         _report(program, args.color)
@@ -143,8 +144,8 @@ def cmd_run(args):
 def cmd_show(args):
     if not _need_source(args):
         return 1
-    source, name, live = _source(args)
-    program = compile_source(source, name, auto_show=live,
+    source, name, live, shell = _source(args)
+    program = compile_source(source, name, auto_show=live, shell_arg=shell,
                              optimize_level=0 if args.no_optimize else 1)
     _report(program, args.color)
     print(program.python)
@@ -154,7 +155,7 @@ def cmd_show(args):
 def cmd_build(args):
     if not _need_source(args):
         return 1
-    source, name, _live = _source(args)
+    source, name, _live, _shell = _source(args)
     program = compile_source(source, name,
                              optimize_level=0 if args.no_optimize else 1)
     _report(program, args.color)
@@ -180,13 +181,13 @@ def cmd_check(args):
     """
     if not _need_source(args):
         return 1
-    source, name, _live = _source(args)
+    source, name, _live, shell = _source(args)
     if args.json:
-        bag = check_source(source, name)
+        bag = check_source(source, name, shell_arg=shell)
         print(bag.to_json())
         return 1 if bag.has_errors() else 0
 
-    program = compile_source(source, name)
+    program = compile_source(source, name, shell_arg=shell)
     _report(program, args.color)
     bag = program.diagnostics
     print(f"ตรวจสอบผ่าน — {bag.summary()}")

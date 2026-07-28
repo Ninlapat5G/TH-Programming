@@ -38,12 +38,10 @@ def py(src, optimize=0):
     return "\n".join(l for l in lines[start:] if l.strip()).strip()
 
 
-def check_source_live(src):
-    """ตรวจแบบ "โหมดพิมพ์สด" เหมือนตอนสั่ง  thprog "โค้ด"  จากบรรทัดคำสั่ง"""
-    try:
-        return compile_source(src, "<คำสั่ง>", auto_show=True).diagnostics
-    except CompileError as err:
-        return err.bag
+def shell_notes(src):
+    """ข้อสังเกตที่ได้เมื่อโค้ดมาจากอาร์กิวเมนต์ของเชลล์  thprog "โค้ด" """
+    bag = check_source(src, "<คำสั่ง>", shell_arg=True)
+    return [d for d in bag if d.code == Code.SHELL_ATE_QUOTES]
 
 
 def out(src):
@@ -401,30 +399,34 @@ class TestCommandLineSource(unittest.TestCase):
         self.assertIn("นำเข้าวิธี strip เป็น______", output)
 
     # ---------------------------------------------- เชลล์กินเครื่องหมายคำพูด
-    def _hint_of(self, argv):
-        bag = check_source_live(argv)
-        return "".join(d.hint or "" for d in bag)
+    def test_note_covers_every_kind_of_error(self):
+        """ข้อสังเกตอยู่ที่ระดับซอร์ส จึงติดมากับข้อผิดพลาดทุกชนิด ไม่เลือกที่รักมักที่ชัง"""
+        cases = {
+            "แสดงผลสวัสดี": Code.UNDEFINED_NAME,
+            "ให้ชื่อเป็นสมชาย": Code.UNDEFINED_NAME,
+            "เพิ่มกเข้าไปในรายชื่อ": Code.UNDEFINED_NAME,
+            "อะไรก็ไม่รู้ 12": Code.RESERVED_AS_NAME,
+        }
+        for src, code in cases.items():
+            with self.subTest(src=src):
+                bag = check_source(src, "<คำสั่ง>", shell_arg=True)
+                self.assertIn(code, [d.code for d in bag])
+                self.assertEqual(len(shell_notes(src)), 1)
 
-    def test_eaten_quotes_get_a_shell_hint(self):
-        """cmd.exe แกะ  "แสดง"สวัสดี""  เหลือแค่  แสดงสวัสดี  ก่อนถึงคอมไพเลอร์"""
-        self.assertIn("เชลล์กินไป", self._hint_of("แสดงผลสวัสดี"))
+    def test_no_note_when_quotes_survived(self):
+        self.assertEqual(shell_notes('แสดงผล "สวัสดี" บวก ก'), [])
 
-    def test_no_shell_hint_when_quotes_survived(self):
-        self.assertNotIn("เชลล์กินไป", self._hint_of('แสดงผล "สวัสดี" บวก ก'))
+    def test_no_note_when_compiling_a_file(self):
+        """ไฟล์ .th และ stdin ไม่ได้ผ่านการแกะอาร์กิวเมนต์ของเชลล์"""
+        bag = check_source("แสดงผลสวัสดี", "<test>")
+        self.assertNotIn(Code.SHELL_ATE_QUOTES, [d.code for d in bag])
 
-    def test_no_shell_hint_for_a_real_expression(self):
-        """ตัวแปรไม่มีจริงในนิพจน์ — ไม่เกี่ยวกับเชลล์ ต้องไม่ไปกวน"""
-        self.assertNotIn("เชลล์กินไป", self._hint_of("แสดง ราคา คูณ 2"))
+    def test_no_note_when_there_is_no_error(self):
+        self.assertEqual(shell_notes("แสดง 1 บวก 2"), [])
 
-    def test_no_shell_hint_for_multi_statement(self):
-        self.assertNotIn("เชลล์กินไป",
-                         self._hint_of("ให้ราคาเป็น 5 แล้วแสดงยอดที่ไม่มี"))
-
-    def test_no_shell_hint_when_compiling_a_file(self):
-        """ไฟล์ .th ไม่ได้ผ่านเชลล์ จึงต้องไม่มีคำใบ้นี้เลย"""
-        self.assertNotIn("เชลล์กินไป",
-                         "".join(d.hint or "" for d in
-                                 check_source("แสดงผลสวัสดี", "<test>")))
+    def test_note_is_not_counted_as_error_or_warning(self):
+        bag = check_source("แสดงผลสวัสดี", "<คำสั่ง>", shell_arg=True)
+        self.assertEqual(bag.summary(), "1 ข้อผิดพลาด")
 
     def test_make_library_unknown_module(self):
         status, _ = self._run(["สร้างคลัง", "ไม่มีโมดูลนี้_zz"])
